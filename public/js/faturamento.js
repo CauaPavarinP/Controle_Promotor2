@@ -16,8 +16,8 @@ async function carregar() {
   try {
     await apiComMemoria(`/api/faturamento?${parametros(filtros())}`, ({ lojas, totais }) => {
     paginas.mostrar(lojas.map((l) => `
-      <tr>
-        <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}</span></td>
+      <tr class="clicavel" data-id="${l.loja.id}">
+        <td><a href="/loja?id=${l.loja.id}">${esc(l.loja.nome)}</a><span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}</span></td>
         <td>${esc([l.loja.cidade, l.loja.uf].filter(Boolean).join(' · '))}</td>
         <td class="num">${reais(l.faturamento)}</td>
         <td class="num">${l.visitas}</td>
@@ -45,6 +45,11 @@ async function carregar() {
   document.getElementById('busca').addEventListener('input', comAtraso(carregar));
   document.getElementById('empresa').addEventListener('change', carregar);
   document.getElementById('situacao').addEventListener('change', carregar);
+  // A linha inteira é clicável (o link no nome continua funcionando para quem usa teclado).
+  document.getElementById('linhas').addEventListener('click', (evento) => {
+    const linha = evento.target.closest('tr[data-id]');
+    if (linha && !evento.target.closest('a')) location.href = `/loja?id=${linha.dataset.id}`;
+  });
   document.getElementById('exportar').addEventListener('click', () => { location.href = `/api/faturamento/exportar?${parametros(filtros())}`; });
   carregar();
 })();

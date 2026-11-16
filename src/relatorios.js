@@ -1,7 +1,7 @@
 // Busca os dados do período no banco e aplica as regras de cálculo (src/calculo.js).
 const config = require('./config');
 const { consulta } = require('./db');
-const { calcular, custoFixo, CAMPOS_CUSTO } = require('./calculo');
+const { calcular, custoFixo, percentual, situacao, CAMPOS_CUSTO } = require('./calculo');
 const { mesValido } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
 
@@ -84,6 +84,67 @@ async function detalheDoPromotor(id, query) {
     percentual: c ? c.percentual : null,
     situacao: c ? c.situacao : 'sem_dados',
     lojas: c ? c.lojas : [],
+  };
+}
+
+// Tudo sobre uma loja no período: faturamento mês a mês e os promotores que a atendem.
+async function detalheDaLoja(id, query) {
+  const periodo = lerPeriodo(query);
+  const [[loja], faturamentos, calculado] = await Promise.all([
+    consulta('SELECT id, nome, cnpj, cidade, uf, endereco FROM lojas WHERE id = $1', [id]),
+    consulta('SELECT mes, empresa, valor FROM faturamento WHERE loja_id = $1 AND mes BETWEEN $2 AND $3 ORDER BY mes, empresa', [id, periodo.de, periodo.ate]),
+    carregar(periodo),
+  ]);
+  if (!loja) return null;
+
+  // Promotores que atendem a loja (cada um com as visitas, o custo e o faturamento dos meses em que atendeu).
+  const promotores = [];
+  const custoPorMes = new Map();
+  for (const p of calculado.promotores) {
+    const naLoja = p.lojas.find((l) => l.loja.id === id);
+    if (!naLoja) continue;
+    promotores.push({
+      id: p.promotor.id, nome: p.promotor.nome, tipo: p.promotor.tipo, agencia: p.promotor.agencia || p.promotor.empresa,
+      visitas: naLoja.visitas, dias: naLoja.dias, custo: naLoja.custo, faturamento: naLoja.faturamento,
+      percentual: naLoja.percentual, situacao: naLoja.situacao,
+    });
+    for (const at of naLoja.atendimentos) custoPorMes.set(at.mes, (custoPorMes.get(at.mes) || 0) + at.custo);
+  }
+  promotores.sort((a, b) => b.custo - a.custo);
+
+  // Uma linha por mês: faturamento (somando as empresas), custo dos promotores e o percentual do mês.
+  const meses = new Map();
+  const linhaDoMes = (mes) => {
+    if (!meses.has(mes)) meses.set(mes, { mes, faturamento: 0, custo: 0, empresas: [] });
+    return meses.get(mes);
+  };
+  for (const f of faturamentos) {
+    const linha = linhaDoMes(f.mes);
+    linha.faturamento += f.valor;
+    linha.empresas.push({ empresa: f.empresa, valor: f.valor });
+  }
+  for (const [mes, custo] of custoPorMes) linhaDoMes(mes).custo += custo;
+  const porMes = [...meses.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map((m) => {
+    const faturamento = Math.round(m.faturamento * 100) / 100;
+    const custo = Math.round(m.custo * 100) / 100;
+    return {
+      ...m, faturamento, custo,
+      percentual: custo > 0 ? percentual(custo, faturamento) : null,
+      situacao: custo > 0 ? situacao(custo, faturamento, config.meta) : 'sem_promotor',
+    };
+  });
+
+  const total = calculado.lojas.find((l) => l.loja.id === id);
+  return {
+    meta: config.meta,
+    loja,
+    faturamento: total ? total.faturamento : 0,
+    custo: total ? total.custo : 0,
+    visitas: total ? total.visitas : 0,
+    percentual: total && total.qtdPromotores ? total.percentual : null,
+    situacao: total ? total.situacao : 'sem_dados',
+    porMes,
+    promotores,
   };
 }
 
@@ -180,4 +241,4 @@ async function opcoes() {
 const listaDeLojas = () => consulta('SELECT id, nome, cnpj, cidade FROM lojas ORDER BY nome');
 const nomesDosPromotores = () => consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome');
 
-module.exports = { resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores };
+module.exports = { resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores };

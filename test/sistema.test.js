@@ -102,6 +102,13 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
 
     const fora = (await regis('/api/faturamento?de=2026-10&ate=2026-10&situacao=fora')).dados.lojas;
     assert.equal(fora.length, 1);
+
+    // Ficha da loja (abre ao clicar numa loja em Faturamento): faturamento mês a mês e quem atende.
+    const ficha = (await regis(`/api/lojas/${fora[0].loja.id}?de=2026-09&ate=2026-10`)).dados;
+    assert.equal(ficha.loja.cnpj, '22222333000106');
+    assert.deepEqual(ficha.porMes.map((m) => [m.mes, m.faturamento, m.custo, m.situacao]), [['2026-10', 1000, 100, 'fora']]);
+    assert.deepEqual(ficha.promotores.map((p) => [p.nome, p.custo, p.percentual]), [['Agência Teste', 100, 10]]);
+    assert.equal((await regis('/api/lojas/999999?de=2026-10&ate=2026-10')).status, 404);
   });
 
   await t.test('o servidor confere os dados da importação e não grava nada pela metade', async () => {

@@ -90,7 +90,8 @@ function desenharMenu(usuario) {
     ['/resumo', 'Resumo'], ['/faturamento', 'Faturamento'], ['/promotores', 'Promotores'], ['/importar', 'Importar'],
   ];
   if (usuario.perfil === 'suporte') paginas.push(['/usuarios', 'Usuários']);
-  const atual = location.pathname === '/promotor' ? '/promotores' : location.pathname;
+  // A ficha do promotor e a da loja ficam "dentro" de Promotores e de Faturamento no menu.
+  const atual = { '/promotor': '/promotores', '/loja': '/faturamento' }[location.pathname] || location.pathname;
   const link = ([endereco, nome]) => `<a href="${endereco}"${endereco === atual ? ' class="ativo" aria-current="page"' : ''}>${nome}</a>`;
   document.getElementById('menu').innerHTML = `
     <div class="marca">Controle de Promotores<small>101 do Brasil</small></div>

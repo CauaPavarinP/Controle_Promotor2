@@ -9,6 +9,7 @@ Sistema web para saber se cada promotor **"se paga"**: o custo dele precisa ser 
 | Login | `/login` | Entrada com login e senha |
 | Resumo | `/resumo` | Cards do período: faturamento total, custo total dos promotores, % do custo sobre o faturamento e promotores dentro/fora da meta |
 | Faturamento | `/faturamento` | Faturamento de cada loja com filtros (período, busca, empresa, situação), custo dos promotores na loja e exportação para Excel |
+| Ficha da loja | `/loja?id=...` | Abre ao clicar numa loja: faturamento mês a mês (por empresa), custo dos promotores, % e quem atende a loja |
 | Promotores | `/promotores` | Lista com filtros (período, busca, tipo, agência, situação, cadastro). Clicar abre a ficha |
 | Ficha do promotor | `/promotor?id=...` | Cadastro completo (código, empresa, admissão, salário, periculosidade, ajuda celular, ajuda de custo/alimentação, almoço, vale-transporte, gratificação, outros), lojas que visita, dias de visita, visitas, custo, faturamento da loja e % |
 | Importar | `/importar` | Importa o faturamento (FoccoERP), os atendimentos (lojas visitadas e valor) e o cadastro de promotores (salários). Mostra as colunas para conferir antes de gravar |
