@@ -9,10 +9,14 @@ class ErroDeImportacao extends Error {}
 const MAX_ITENS = 300000;
 const LOTE = 1000; // quantas linhas gravamos por comando SQL
 
-const texto = (v, tamanho) => String(v ?? '').trim().slice(0, tamanho);
+// Limpa um texto: tira o caractere nulo (o PostgreSQL não aceita) e corta no tamanho máximo.
+const texto = (v, tamanho) => String(v ?? '').replace(/\u0000/g, '').trim().slice(0, tamanho);
+
+// O maior valor que cabe nas colunas de dinheiro do banco (NUMERIC(14,2)).
+const VALOR_MAXIMO = 999999999999.99;
 
 function conferirLoja(loja) {
-  const cnpj = String(loja?.cnpj ?? '');
+  const cnpj = String(loja?.cnpj ?? '').trim();
   if (cnpj && !/^\d{11,14}$/.test(cnpj)) throw new ErroDeImportacao('CNPJ inválido nos dados enviados.');
   const nome = texto(loja?.nome, 200);
   if (!cnpj && !nome) throw new ErroDeImportacao('Há um registro sem loja nos dados enviados.');
@@ -32,7 +36,7 @@ function conferirMes(mes) {
 }
 
 function conferirNumero(valor, { minimo, nome }) {
-  if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < minimo || Math.abs(valor) > 1e12) {
+  if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < minimo || Math.abs(valor) > VALOR_MAXIMO) {
     throw new ErroDeImportacao(`${nome} inválido nos dados enviados.`);
   }
   return Math.round(valor * 100) / 100;
@@ -49,43 +53,65 @@ function conferirEnvio(dados) {
   return motivos;
 }
 
-// Carrega todas as lojas de uma vez e devolve uma função que acha (ou cadastra) a loja de um item.
-// Procura pelo CNPJ; sem CNPJ, pelo nome.
-async function prepararLojas(rodar, contagem) {
+// Descobre o id de cada loja dos itens, cadastrando as que ainda não existem.
+// Procura pelo CNPJ; sem CNPJ, pelo nome. Devolve um Map: chave da loja -> id.
+// Faz tudo com poucos comandos SQL (um SELECT e INSERTs em lote), porque um arquivo do Focco
+// pode trazer milhares de lojas novas e um comando por loja deixaria a importação lenta.
+async function resolverLojas(rodar, itens, contagem) {
   const porCnpj = new Map();
-  const porNome = new Map();
-  const semCnpjPorNome = new Map();
+  const porNome = new Map(); // qualquer loja com esse nome (a mais antiga)
+  const semCnpjPorNome = new Map(); // só as que ainda não têm CNPJ
   for (const l of await rodar('SELECT id, nome, cnpj FROM lojas ORDER BY id')) {
     const nome = l.nome.toLowerCase();
     if (l.cnpj) porCnpj.set(l.cnpj, l.id);
     else if (!semCnpjPorNome.has(nome)) semCnpjPorNome.set(nome, l.id);
     if (!porNome.has(nome)) porNome.set(nome, l.id);
   }
-  const resolvidas = new Map();
 
-  return async (loja) => {
-    if (resolvidas.has(loja.chave)) return resolvidas.get(loja.chave);
+  const ids = new Map();
+  const novasComCnpj = new Map(); // cnpj -> loja
+  const novasSemCnpj = new Map(); // nome minúsculo -> loja
+  for (const { loja } of itens) {
+    if (ids.has(loja.chave) || novasComCnpj.has(loja.cnpj) || (!loja.cnpj && novasSemCnpj.has(loja.nome.toLowerCase()))) continue;
     const nome = loja.nome.toLowerCase();
-    let id = loja.cnpj ? porCnpj.get(loja.cnpj) : porNome.get(nome);
-    if (!id && loja.cnpj && semCnpjPorNome.has(nome)) {
-      // Loja que já existia só com o nome (veio de uma planilha sem CNPJ): aproveita e grava o CNPJ.
-      id = semCnpjPorNome.get(nome);
-      semCnpjPorNome.delete(nome);
-      await rodar('UPDATE lojas SET cnpj = $1 WHERE id = $2', [loja.cnpj, id]);
+    if (loja.cnpj) {
+      if (porCnpj.has(loja.cnpj)) ids.set(loja.chave, porCnpj.get(loja.cnpj));
+      else if (semCnpjPorNome.has(nome)) {
+        // Loja que já existia só com o nome (veio de uma planilha sem CNPJ): aproveita e grava o CNPJ.
+        const id = semCnpjPorNome.get(nome);
+        semCnpjPorNome.delete(nome);
+        await rodar('UPDATE lojas SET cnpj = $1 WHERE id = $2', [loja.cnpj, id]);
+        porCnpj.set(loja.cnpj, id);
+        ids.set(loja.chave, id);
+      } else novasComCnpj.set(loja.cnpj, loja);
+    } else if (porNome.has(nome)) ids.set(loja.chave, porNome.get(nome));
+    else novasSemCnpj.set(nome, loja);
+  }
+
+  const novas = [...novasComCnpj.values(), ...novasSemCnpj.values()];
+  for (let i = 0; i < novas.length; i += LOTE) {
+    const lote = novas.slice(i, i + LOTE);
+    const criadas = await rodar(
+      `INSERT INTO lojas (nome, cnpj, cidade, uf, endereco)
+       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+       RETURNING id, nome, cnpj`,
+      [lote.map((l) => l.nome), lote.map((l) => l.cnpj || null), lote.map((l) => l.cidade), lote.map((l) => l.uf), lote.map((l) => l.endereco)],
+    );
+    for (const criada of criadas) {
+      const loja = criada.cnpj ? novasComCnpj.get(criada.cnpj) : novasSemCnpj.get(criada.nome.toLowerCase());
+      ids.set(loja.chave, criada.id);
     }
-    if (!id) {
-      const [nova] = await rodar(
-        'INSERT INTO lojas (nome, cnpj, cidade, uf, endereco) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [loja.nome, loja.cnpj || null, loja.cidade, loja.uf, loja.endereco],
-      );
-      id = nova.id;
-      contagem.lojasNovas++;
-      if (!porNome.has(nome)) porNome.set(nome, id);
-    }
-    if (loja.cnpj) porCnpj.set(loja.cnpj, id);
-    resolvidas.set(loja.chave, id);
-    return id;
-  };
+  }
+  contagem.lojasNovas = novas.length;
+  return ids;
+}
+
+// Soma os valores e confere se o total cabe no banco (um valor absurdo indica coluna errada escolhida na tela).
+function conferirTotal(valor) {
+  if (Math.abs(valor) > VALOR_MAXIMO) {
+    throw new ErroDeImportacao('O valor somado ficou grande demais. Confira se a coluna de valor escolhida é a certa.');
+  }
+  return Math.round(valor * 100) / 100;
 }
 
 async function registrarImportacao(rodar, tipo, arquivo, usuario) {
@@ -104,7 +130,7 @@ function montarResultado(registros, motivos, contagem, campoTotal) {
     ignoradas: Object.values(motivos).reduce((a, b) => a + b, 0),
     motivos,
     ...contagem,
-    total: Math.round(registros.reduce((soma, r) => soma + (r[campoTotal] || 0), 0) * 100) / 100,
+    total: conferirTotal(registros.reduce((soma, r) => soma + (r[campoTotal] || 0), 0)),
     meses: [...new Set(registros.map((r) => r.mes))].sort(),
   };
 }
@@ -123,25 +149,26 @@ async function gravarFaturamento(dados, usuario) {
 
   return transacao(async (rodar) => {
     const contagem = { lojasNovas: 0 };
-    const acharLoja = await prepararLojas(rodar, contagem);
+    const lojas = await resolverLojas(rodar, itens, contagem);
     const importacaoId = await registrarImportacao(rodar, 'faturamento', dados.arquivo, usuario);
 
     // Soma de novo por loja (já com o id do banco) + mês + empresa, para nunca gravar a mesma chave duas vezes.
     const somas = new Map();
     for (const item of itens) {
-      const lojaId = await acharLoja(item.loja);
+      const lojaId = lojas.get(item.loja.chave);
       const chave = `${lojaId}|${item.mes}|${item.empresa}`;
       if (!somas.has(chave)) somas.set(chave, { lojaId, mes: item.mes, empresa: item.empresa, valor: 0 });
       somas.get(chave).valor += item.valor;
     }
     const registros = [...somas.values()];
+    for (const registro of registros) registro.valor = conferirTotal(registro.valor);
     for (let i = 0; i < registros.length; i += LOTE) {
       const lote = registros.slice(i, i + LOTE);
       await rodar(
         `INSERT INTO faturamento (loja_id, mes, empresa, valor, importacao_id)
-         SELECT loja_id, mes, empresa, valor, $5 FROM unnest($1::int[], $2::text[], $3::text[], $4::numeric[]) AS t(loja_id, mes, empresa, valor)
+         SELECT loja_id, mes, empresa, valor, $5::int FROM unnest($1::int[], $2::text[], $3::text[], $4::numeric[]) AS t(loja_id, mes, empresa, valor)
          ON CONFLICT (loja_id, mes, empresa) DO UPDATE SET valor = EXCLUDED.valor, importacao_id = EXCLUDED.importacao_id`,
-        [lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.empresa), lote.map((r) => Math.round(r.valor * 100) / 100), importacaoId],
+        [lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.empresa), lote.map((r) => r.valor), importacaoId],
       );
     }
     const resultado = montarResultado(registros, motivos, contagem, 'valor');
@@ -172,7 +199,7 @@ async function gravarVisitas(dados, usuario) {
 
   return transacao(async (rodar) => {
     const contagem = { lojasNovas: 0, promotoresNovos: 0 };
-    const acharLoja = await prepararLojas(rodar, contagem);
+    const lojas = await resolverLojas(rodar, itens, contagem);
     const importacaoId = await registrarImportacao(rodar, 'visitas', dados.arquivo, usuario);
 
     const promotores = new Map();
@@ -196,7 +223,7 @@ async function gravarVisitas(dados, usuario) {
     const somas = new Map();
     for (const item of itens) {
       const promotorId = await acharPromotor(item.promotor);
-      const lojaId = await acharLoja(item.loja);
+      const lojaId = lojas.get(item.loja.chave);
       const chave = `${promotorId}|${lojaId}|${item.mes}`;
       if (!somas.has(chave)) somas.set(chave, { promotorId, lojaId, mes: item.mes, visitas: 0, custo: null });
       const soma = somas.get(chave);
@@ -204,15 +231,19 @@ async function gravarVisitas(dados, usuario) {
       if (item.custo !== null) soma.custo = (soma.custo || 0) + item.custo;
     }
     const registros = [...somas.values()];
+    for (const registro of registros) {
+      if (registro.custo !== null) registro.custo = conferirTotal(registro.custo);
+      if (registro.visitas > 100000) throw new ErroDeImportacao('Quantidade de visitas grande demais. Confira a coluna de visitas.');
+    }
     for (let i = 0; i < registros.length; i += LOTE) {
       const lote = registros.slice(i, i + LOTE);
       await rodar(
         `INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo, importacao_id)
-         SELECT promotor_id, loja_id, mes, qtd, custo, $6 FROM unnest($1::int[], $2::int[], $3::text[], $4::int[], $5::numeric[]) AS t(promotor_id, loja_id, mes, qtd, custo)
+         SELECT promotor_id, loja_id, mes, qtd, custo, $6::int FROM unnest($1::int[], $2::int[], $3::text[], $4::int[], $5::numeric[]) AS t(promotor_id, loja_id, mes, qtd, custo)
          ON CONFLICT (promotor_id, loja_id, mes) DO UPDATE
            SET qtd_visitas = EXCLUDED.qtd_visitas, custo = EXCLUDED.custo, importacao_id = EXCLUDED.importacao_id`,
         [lote.map((r) => r.promotorId), lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.visitas),
-          lote.map((r) => (r.custo === null ? null : Math.round(r.custo * 100) / 100)), importacaoId],
+          lote.map((r) => r.custo), importacaoId],
       );
     }
     const resultado = montarResultado(registros, motivos, contagem, 'custo');

@@ -189,7 +189,10 @@ function criarApp() {
     if (erro.type === 'entity.too.large') return res.status(413).json({ erro: 'Arquivo .xlsx grande demais (máximo 25 MB). Salve como .csv e importe de novo: .csv e o .xls do Focco não têm limite.' });
     if (erro.type === 'entity.parse.failed') return res.status(400).json({ erro: 'Dados inválidos.' });
     console.error(erro);
-    res.status(500).json({ erro: 'Erro interno. Tente de novo; se continuar, avise o suporte.' });
+    // Em produção a tela mostra só uma mensagem genérica (o detalhe fica no log do servidor).
+    // Rodando no computador (desenvolvimento), mostramos o detalhe para facilitar achar o problema.
+    const detalhe = config.producao ? '' : ` Detalhe: ${erro.message}`;
+    res.status(500).json({ erro: `Erro interno. Tente de novo; se continuar, avise o suporte.${detalhe}` });
   });
 
   return app;
