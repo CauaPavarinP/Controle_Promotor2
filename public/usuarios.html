@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Usuários · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo">
+        <div><h1>Usuários do sistema</h1><p class="subtitulo">Só o suporte vê esta tela. Os demais usam o sistema normalmente, sem administrar usuários.</p></div>
+        <button type="button" id="novo">Novo usuário</button>
+      </div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="painel">
+        <div class="rolagem">
+          <table>
+            <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>Situação</th><th></th></tr></thead>
+            <tbody id="linhas"></tbody>
+          </table>
+        </div>
+      </div>
+      <dialog id="janela">
+        <form method="dialog" id="form">
+          <h2 id="titulo-janela">Novo usuário</h2>
+          <div id="aviso-janela" class="aviso" hidden></div>
+          <div class="grade">
+            <div class="campo inteiro"><label for="u-nome">Nome</label><input id="u-nome" required maxlength="80"></div>
+            <div class="campo"><label for="u-login">Login</label><input id="u-login" required autocomplete="off" autocapitalize="none"></div>
+            <div class="campo"><label for="u-perfil">Perfil</label>
+              <select id="u-perfil"><option value="usuario">Usuário</option><option value="suporte">Suporte (administra usuários)</option></select></div>
+            <div class="campo inteiro"><label for="u-senha" id="rotulo-senha">Senha (mínimo 8 caracteres)</label><input id="u-senha" type="password" autocomplete="new-password" minlength="8"></div>
+          </div>
+          <div class="botoes"><button type="button" class="secundario" id="cancelar">Cancelar</button><button type="submit">Salvar</button></div>
+        </form>
+      </dialog>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/usuarios.js"></script>
+</body>
+</html>

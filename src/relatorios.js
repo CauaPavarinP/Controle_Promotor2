@@ -1,0 +1,169 @@
+// Busca os dados do período no banco e aplica as regras de cálculo (src/calculo.js).
+const config = require('./config');
+const { consulta } = require('./db');
+const { calcular, custoFixo, CAMPOS_CUSTO } = require('./calculo');
+const { mesValido } = require('./planilha');
+const { ErroDeValidacao } = require('./auth');
+
+function lerPeriodo(query) {
+  const { de, ate } = query;
+  if (!mesValido(de) || !mesValido(ate)) throw new ErroDeValidacao('Informe o período (mês inicial e final).');
+  if (de > ate) throw new ErroDeValidacao('O mês inicial não pode ser depois do mês final.');
+  return { de, ate };
+}
+
+async function carregar({ de, ate }, empresa = '') {
+  const [promotores, lojas, visitas, faturamentos] = await Promise.all([
+    consulta('SELECT * FROM promotores'),
+    consulta('SELECT id, nome, cnpj, cidade, uf FROM lojas'),
+    consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
+    consulta("SELECT loja_id, mes, valor FROM faturamento WHERE mes BETWEEN $1 AND $2 AND ($3 = '' OR empresa = $3)", [de, ate, empresa]),
+  ]);
+  return { ...calcular({ promotores, lojas, visitas, faturamentos, meta: config.meta }), cadastro: promotores };
+}
+
+const contem = (texto, busca) => String(texto || '').toLowerCase().includes(busca);
+
+async function resumo(query) {
+  return (await carregar(lerPeriodo(query))).resumo;
+}
+
+// Lojas com faturamento e/ou visitas no período.
+async function faturamentoPorLoja(query) {
+  const { lojas } = await carregar(lerPeriodo(query), String(query.empresa || ''));
+  const busca = String(query.busca || '').trim().toLowerCase();
+  const buscaDigitos = busca.replace(/\D/g, '');
+  const filtradas = lojas
+    .filter((l) => !busca || contem(l.loja.nome, busca) || contem(l.loja.cidade, busca) || (buscaDigitos && contem(l.loja.cnpj, buscaDigitos)))
+    .filter((l) => !query.situacao || l.situacao === query.situacao)
+    .sort((a, b) => b.faturamento - a.faturamento);
+  const soma = (campo) => Math.round(filtradas.reduce((s, l) => s + l[campo], 0) * 100) / 100;
+  return { meta: config.meta, lojas: filtradas, totais: { faturamento: soma('faturamento'), custo: soma('custo'), visitas: soma('visitas') } };
+}
+
+// Todos os promotores cadastrados, com os números do período (zerados para quem não teve visita).
+async function listaDePromotores(query) {
+  const { promotores, cadastro } = await carregar(lerPeriodo(query));
+  const calculados = new Map(promotores.map((p) => [p.promotor.id, p]));
+  const busca = String(query.busca || '').trim().toLowerCase();
+  const lista = cadastro
+    .map((p) => {
+      const c = calculados.get(p.id);
+      return {
+        id: p.id, nome: p.nome, tipo: p.tipo, agencia: p.agencia, ativo: p.ativo,
+        qtdLojas: c ? c.qtdLojas : 0,
+        visitas: c ? c.visitas : 0,
+        custo: c ? c.custo : 0,
+        faturamento: c ? c.faturamento : 0,
+        percentual: c ? c.percentual : null,
+        situacao: c ? c.situacao : 'sem_dados',
+      };
+    })
+    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca))
+    .filter((p) => !query.tipo || p.tipo === query.tipo)
+    .filter((p) => !query.agencia || p.agencia === query.agencia)
+    .filter((p) => !query.situacao || p.situacao === query.situacao)
+    .filter((p) => !query.ativo || String(p.ativo) === query.ativo)
+    // Primeiro quem mais estoura a meta; quem não tem percentual vai para o fim.
+    .sort((a, b) => (b.percentual ?? -1) - (a.percentual ?? -1) || a.nome.localeCompare(b.nome));
+  return { meta: config.meta, promotores: lista };
+}
+
+async function detalheDoPromotor(id, query) {
+  const { promotores, cadastro } = await carregar(lerPeriodo(query));
+  const promotor = cadastro.find((p) => p.id === id);
+  if (!promotor) return null;
+  const c = promotores.find((p) => p.promotor.id === id);
+  return {
+    meta: config.meta,
+    promotor: { ...promotor, custoFixo: custoFixo(promotor) },
+    visitas: c ? c.visitas : 0,
+    custo: c ? c.custo : 0,
+    faturamento: c ? c.faturamento : 0,
+    percentual: c ? c.percentual : null,
+    situacao: c ? c.situacao : 'sem_dados',
+    lojas: c ? c.lojas : [],
+  };
+}
+
+// ----- Cadastro de promotor -----
+
+function dinheiro(valor, rotulo) {
+  const numero = valor === undefined || valor === '' || valor === null ? 0 : Number(valor);
+  if (!Number.isFinite(numero) || numero < 0 || numero > 9999999) throw new ErroDeValidacao(`Valor inválido em "${rotulo}".`);
+  return Math.round(numero * 100) / 100;
+}
+
+function validarPromotor(dados) {
+  const nome = String(dados.nome || '').trim();
+  if (!nome) throw new ErroDeValidacao('Informe o nome do promotor.');
+  if (!['CLT', 'MEI', 'AGENCIA'].includes(dados.tipo)) throw new ErroDeValidacao('Escolha o tipo: CLT, MEI ou Agência.');
+  const limpo = {
+    nome,
+    tipo: dados.tipo,
+    agencia: String(dados.agencia || '').trim(),
+    telefone: String(dados.telefone || '').trim(),
+    observacao: String(dados.observacao || '').trim(),
+    ativo: dados.ativo === undefined ? true : Boolean(dados.ativo),
+  };
+  for (const campo of CAMPOS_CUSTO) limpo[campo] = dinheiro(dados[campo], campo);
+  return limpo;
+}
+
+const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
+
+async function salvarPromotor(id, dados) {
+  const p = validarPromotor(dados);
+  const [repetido] = await consulta('SELECT id FROM promotores WHERE lower(nome) = lower($1) AND id <> $2', [p.nome, id || 0]);
+  if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome.');
+  const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
+  if (id) {
+    const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
+    const linhas = await consulta(`UPDATE promotores SET ${atribuicoes} WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
+    if (!linhas.length) throw new ErroDeValidacao('Promotor não encontrado.');
+    return id;
+  }
+  const marcadores = COLUNAS_PROMOTOR.map((_, i) => `$${i + 1}`).join(', ');
+  const [criado] = await consulta(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}) VALUES (${marcadores}) RETURNING id`, valores);
+  return criado.id;
+}
+
+// Lançamento manual de um atendimento (promotor + loja + mês). Se já existir, substitui.
+async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
+  if (!mesValido(mes)) throw new ErroDeValidacao('Informe o mês.');
+  const qtd = Number(visitas);
+  if (!Number.isInteger(qtd) || qtd < 0 || qtd > 999) throw new ErroDeValidacao('Quantidade de visitas inválida.');
+  const valor = custo === '' || custo === null || custo === undefined ? null : dinheiro(custo, 'custo');
+  const [[promotor], [loja]] = await Promise.all([
+    consulta('SELECT id FROM promotores WHERE id = $1', [Number(promotorId) || 0]),
+    consulta('SELECT id FROM lojas WHERE id = $1', [Number(lojaId) || 0]),
+  ]);
+  if (!promotor) throw new ErroDeValidacao('Promotor não encontrado.');
+  if (!loja) throw new ErroDeValidacao('Escolha uma loja da lista.');
+  await consulta(
+    `INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (promotor_id, loja_id, mes) DO UPDATE SET qtd_visitas = EXCLUDED.qtd_visitas, custo = EXCLUDED.custo, importacao_id = NULL`,
+    [promotor.id, loja.id, mes, qtd, valor],
+  );
+}
+
+// Listas usadas nos filtros das telas.
+async function opcoes() {
+  const [meses, empresas, agencias, promotores, lojas] = await Promise.all([
+    consulta('SELECT mes FROM faturamento UNION SELECT mes FROM visitas ORDER BY mes'),
+    consulta("SELECT DISTINCT empresa FROM faturamento WHERE empresa <> '' ORDER BY empresa"),
+    consulta("SELECT DISTINCT agencia FROM promotores WHERE agencia <> '' ORDER BY agencia"),
+    consulta('SELECT id, nome, tipo FROM promotores WHERE ativo ORDER BY nome'),
+    consulta('SELECT id, nome, cnpj FROM lojas ORDER BY nome'),
+  ]);
+  return {
+    meta: config.meta,
+    meses: meses.map((m) => m.mes),
+    empresas: empresas.map((e) => e.empresa),
+    agencias: agencias.map((a) => a.agencia),
+    promotores,
+    lojas,
+  };
+}
+
+module.exports = { resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, salvarPromotor, salvarVisita, opcoes };

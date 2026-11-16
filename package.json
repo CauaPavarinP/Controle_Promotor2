@@ -1,0 +1,23 @@
+{
+  "name": "controle-promotor",
+  "version": "1.0.0",
+  "description": "Controle de Promotores — custo dos promotores x faturamento das lojas (101 do Brasil)",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-session": "^2.1.1",
+    "dotenv": "^18.0.10",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  }
+}

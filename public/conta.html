@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minha conta · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo"><div><h1>Minha conta</h1><p class="subtitulo" id="quem"></p></div></div>
+      <div class="painel">
+        <h2>Trocar a senha</h2>
+        <div id="aviso" class="aviso" hidden></div>
+        <form id="form">
+          <div class="grade">
+            <div class="campo inteiro"><label for="atual">Senha atual</label><input id="atual" type="password" required autocomplete="current-password"></div>
+            <div class="campo"><label for="nova">Senha nova (mínimo 8 caracteres)</label><input id="nova" type="password" required minlength="8" autocomplete="new-password"></div>
+            <div class="campo"><label for="repetir">Repita a senha nova</label><input id="repetir" type="password" required minlength="8" autocomplete="new-password"></div>
+          </div>
+          <button type="submit">Trocar senha</button>
+        </form>
+      </div>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/conta.js"></script>
+</body>
+</html>

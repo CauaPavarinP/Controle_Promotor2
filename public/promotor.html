@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Promotor · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <p><a href="/promotores">← Voltar para Promotores</a></p>
+      <div class="topo">
+        <div><h1 id="nome">Promotor</h1><p class="subtitulo" id="sub"></p></div>
+        <div class="filtros">
+          <div class="campo"><label for="periodo-de">De</label><select id="periodo-de"></select></div>
+          <div class="campo"><label for="periodo-ate">Até</label><select id="periodo-ate"></select></div>
+          <button type="button" id="editar" class="secundario">Editar cadastro</button>
+        </div>
+      </div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="cards" id="cards"></div>
+      <div class="painel">
+        <h2>Cadastro e custos mensais</h2>
+        <dl class="ficha" id="ficha"></dl>
+        <p class="ajuda" id="regra"></p>
+      </div>
+      <div class="painel">
+        <div class="topo">
+          <h2>Lojas que visita</h2>
+          <button type="button" id="lancar" class="secundario">Lançar visita</button>
+        </div>
+        <div class="rolagem">
+          <table>
+            <thead><tr><th>Loja</th><th class="num">Visitas</th><th class="num">Custo</th><th class="num">Faturamento da loja</th><th class="num">% custo</th><th>Situação</th><th></th></tr></thead>
+            <tbody id="linhas"></tbody>
+            <tfoot id="totais"></tfoot>
+          </table>
+        </div>
+      </div>
+      <dialog id="janela-visita">
+        <form method="dialog" id="form-visita">
+          <h2>Lançar visita</h2>
+          <div id="aviso-visita" class="aviso" hidden></div>
+          <div class="grade">
+            <div class="campo inteiro"><label for="v-loja">Loja (digite para procurar)</label><input id="v-loja" list="lista-lojas" required autocomplete="off"><datalist id="lista-lojas"></datalist></div>
+            <div class="campo"><label for="v-mes">Mês</label><select id="v-mes" required></select></div>
+            <div class="campo"><label for="v-visitas">Visitas no mês</label><input id="v-visitas" type="number" min="0" max="999" step="1" required></div>
+            <div class="campo inteiro"><label for="v-custo">Custo no mês (R$) — opcional</label><input id="v-custo" type="number" min="0" step="0.01">
+              <p class="ajuda">Deixe em branco para usar o custo fixo do cadastro, dividido pelas visitas.</p></div>
+          </div>
+          <div class="botoes"><button type="button" class="secundario" id="v-cancelar">Cancelar</button><button type="submit">Salvar</button></div>
+        </form>
+      </dialog>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/form-promotor.js"></script>
+  <script src="/js/promotor.js"></script>
+</body>
+</html>

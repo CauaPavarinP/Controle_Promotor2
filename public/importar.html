@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Importar · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo">
+        <div><h1>Importar planilhas</h1><p class="subtitulo">Aceita arquivos .xlsx e .csv. Antes de gravar, você confere as colunas.</p></div>
+        <a class="botao secundario" href="/api/modelo/visitas">Baixar modelo de visitas</a>
+      </div>
+      <div class="painel">
+        <h2>1. Escolha o que vai importar</h2>
+        <div class="filtros">
+          <div class="campo"><label for="tipo">Tipo de planilha</label>
+            <select id="tipo"><option value="faturamento">Faturamento (FoccoERP)</option><option value="visitas">Visitas dos promotores</option></select>
+          </div>
+          <div class="campo largo"><label for="arquivo">Arquivo</label><input id="arquivo" type="file" accept=".xlsx,.csv,.txt"></div>
+        </div>
+        <p class="ajuda" id="ajuda-tipo"></p>
+      </div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="painel" id="conferencia" hidden>
+        <h2>2. Confira as colunas</h2>
+        <p class="ajuda">O sistema tentou reconhecer cada coluna pelo nome. Corrija o que estiver errado.</p>
+        <div class="filtros" id="aba-linha" hidden>
+          <div class="campo"><label for="aba">Aba da planilha</label><select id="aba"></select></div>
+        </div>
+        <div class="grade" id="mapa"></div>
+        <h2>3. Informações que não estão no arquivo</h2>
+        <div class="grade" id="extras">
+          <div class="campo" id="campo-mes"><label for="mes">Mês das informações</label><select id="mes"></select>
+            <p class="ajuda">Usado quando a linha não tem data.</p></div>
+          <div class="campo" data-so="faturamento"><label for="empresa">Empresa (opcional)</label><input id="empresa" list="lista-empresas" autocomplete="off"><datalist id="lista-empresas"></datalist></div>
+          <div class="campo" data-so="visitas" id="campo-promotor"><label for="promotor">Promotor / agência deste arquivo</label><select id="promotor"></select></div>
+          <div class="campo" data-novo><label for="novo-nome">Nome do novo promotor ou agência</label><input id="novo-nome"></div>
+          <div class="campo" data-novo><label for="novo-tipo">Tipo</label>
+            <select id="novo-tipo"><option value="AGENCIA">Agência</option><option value="CLT">CLT</option><option value="MEI">MEI</option></select></div>
+          <div class="campo" data-novo><label for="novo-agencia">Agência (se houver)</label><input id="novo-agencia"></div>
+        </div>
+        <h2>Primeiras linhas do arquivo</h2>
+        <div class="rolagem"><table id="amostra"></table></div>
+        <p class="ajuda" id="substitui"></p>
+        <div class="botoes"><button type="button" id="confirmar">Importar</button></div>
+      </div>
+      <div class="painel">
+        <h2>Últimas importações</h2>
+        <div class="rolagem">
+          <table>
+            <thead><tr><th>Quando</th><th>Tipo</th><th>Arquivo</th><th>Quem</th><th>Meses</th><th class="num">Registros</th><th class="num">Ignoradas</th><th class="num">Total</th></tr></thead>
+            <tbody id="historico"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/importar.js"></script>
+</body>
+</html>

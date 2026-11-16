@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resumo · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo">
+        <div><h1>Resumo</h1><p class="subtitulo" id="meta-texto"></p></div>
+        <div class="filtros">
+          <div class="campo"><label for="periodo-de">De</label><select id="periodo-de"></select></div>
+          <div class="campo"><label for="periodo-ate">Até</label><select id="periodo-ate"></select></div>
+        </div>
+      </div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="cards" id="cards"></div>
+      <div class="painel" id="primeiros-passos" hidden>
+        <h2>Ainda não há dados neste período</h2>
+        <p>Para o resumo aparecer, importe as duas planilhas na tela <a href="/importar">Importar</a>:</p>
+        <ol>
+          <li>o <strong>faturamento</strong> das lojas, exportado do FoccoERP;</li>
+          <li>as <strong>visitas</strong> dos promotores (planilhas das agências, CLTs e MEIs).</li>
+        </ol>
+      </div>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/resumo.js"></script>
+</body>
+</html>

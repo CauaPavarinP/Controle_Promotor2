@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Promotores · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo">
+        <div><h1>Promotores</h1><p class="subtitulo">Clique em um promotor para ver todas as informações dele.</p></div>
+        <div class="acoes">
+          <button type="button" id="novo">Novo promotor</button>
+          <button type="button" id="exportar" class="secundario">Exportar Excel</button>
+        </div>
+      </div>
+      <div class="painel">
+        <div class="filtros">
+          <div class="campo"><label for="periodo-de">De</label><select id="periodo-de"></select></div>
+          <div class="campo"><label for="periodo-ate">Até</label><select id="periodo-ate"></select></div>
+          <div class="campo largo"><label for="busca">Buscar por nome ou agência</label><input id="busca" type="search" autocomplete="off"></div>
+          <div class="campo"><label for="tipo">Tipo</label>
+            <select id="tipo"><option value="">Todos</option><option value="CLT">CLT</option><option value="MEI">MEI</option><option value="AGENCIA">Agência</option></select>
+          </div>
+          <div class="campo"><label for="agencia">Agência</label><select id="agencia"><option value="">Todas</option></select></div>
+          <div class="campo"><label for="situacao">Situação</label>
+            <select id="situacao">
+              <option value="">Todas</option><option value="dentro">Dentro da meta</option><option value="fora">Fora da meta</option>
+              <option value="sem_faturamento">Sem faturamento</option><option value="sem_dados">Sem dados</option>
+            </select>
+          </div>
+          <div class="campo"><label for="ativo">Cadastro</label>
+            <select id="ativo"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select>
+          </div>
+        </div>
+      </div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="painel">
+        <div class="rolagem">
+          <table>
+            <thead><tr><th>Promotor</th><th>Tipo</th><th class="num">Lojas</th><th class="num">Visitas</th><th class="num">Custo</th><th class="num">Faturamento das lojas</th><th class="num">% custo</th><th>Situação</th></tr></thead>
+            <tbody id="linhas"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/form-promotor.js"></script>
+  <script src="/js/promotores.js"></script>
+</body>
+</html>
