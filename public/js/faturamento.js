@@ -1,4 +1,6 @@
 // Tela Faturamento: lojas do período, com o custo dos promotores de cada uma.
+let opcoesDaTela = null; // listas vindas do servidor (meses com dados, empresas, agências...)
+
 const filtros = () => ({
   ...periodoAtual(),
   busca: document.getElementById('busca').value.trim(),
@@ -8,7 +10,7 @@ const filtros = () => ({
 
 async function carregar() {
   const aviso = document.getElementById('aviso');
-  mostrarAviso(aviso, '');
+  mostrarAviso(aviso, opcoesDaTela ? faltaNoPeriodo(opcoesDaTela) : '', '');
   try {
     const { lojas, totais } = await api(`/api/faturamento?${parametros(filtros())}`);
     document.getElementById('linhas').innerHTML = lojas.map((l) => `
@@ -33,6 +35,7 @@ async function carregar() {
 (async () => {
   await iniciarPagina();
   const opcoes = await api('/api/opcoes');
+  opcoesDaTela = opcoes;
   document.getElementById('empresa').insertAdjacentHTML('beforeend', opcoes.empresas.map((e) => `<option>${esc(e)}</option>`).join(''));
   montarPeriodo(opcoes, carregar);
   document.getElementById('busca').addEventListener('input', comAtraso(carregar));

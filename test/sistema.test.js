@@ -155,6 +155,18 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.deepEqual([r3.promotoresNovos, r3.promotoresAtualizados], [0, 1]);
   });
 
+  await t.test('reiniciar o sistema com dados já gravados não dá erro', async () => {
+    // Dois promotores com o mesmo nome, de agências diferentes (acontece na planilha real).
+    const gravar = (agencia) => regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'x', itens: [
+      { promotor: { nome: 'JOAO', tipo: 'AGENCIA', agencia }, loja: { nome: 'Loja do João', cnpj: '', cidade: agencia }, mes: '2026-10', visitas: 1, custo: 10 },
+    ] } });
+    assert.equal((await gravar('Agência A')).status, 200);
+    assert.equal((await gravar('Agência B')).status, 200);
+    // "iniciarBanco" roda toda vez que o servidor liga. Tem que funcionar com as tabelas já cheias.
+    await iniciarBanco();
+    await iniciarBanco();
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

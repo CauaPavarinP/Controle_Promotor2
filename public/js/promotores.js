@@ -1,4 +1,6 @@
 // Tela Promotores: lista com filtros. Clicar em uma linha abre a ficha completa.
+let opcoesDaTela = null; // listas vindas do servidor (meses com dados, empresas, agências...)
+
 const filtros = () => ({
   ...periodoAtual(),
   busca: document.getElementById('busca').value.trim(),
@@ -10,7 +12,7 @@ const filtros = () => ({
 
 async function carregar() {
   const aviso = document.getElementById('aviso');
-  mostrarAviso(aviso, '');
+  mostrarAviso(aviso, opcoesDaTela ? faltaNoPeriodo(opcoesDaTela) : '', '');
   try {
     const { promotores } = await api(`/api/promotores?${parametros(filtros())}`);
     document.getElementById('linhas').innerHTML = promotores.map((p) => `
@@ -32,6 +34,7 @@ async function carregar() {
 (async () => {
   await iniciarPagina();
   const opcoes = await api('/api/opcoes');
+  opcoesDaTela = opcoes;
   document.getElementById('agencia').insertAdjacentHTML('beforeend', opcoes.agencias.map((a) => `<option>${esc(a)}</option>`).join(''));
   // O Resumo manda para cá já filtrando (ex.: /promotores?situacao=fora).
   const situacao = new URLSearchParams(location.search).get('situacao');

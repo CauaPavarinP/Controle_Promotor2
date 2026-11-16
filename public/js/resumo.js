@@ -1,12 +1,15 @@
 // Tela Resumo: os cards com os números do período.
+let opcoes = null; // listas vindas do servidor (meses com dados, meta...)
+
 async function carregar() {
   const aviso = document.getElementById('aviso');
   mostrarAviso(aviso, '');
   try {
     const { de, ate } = periodoAtual();
     const r = await api(`/api/resumo?${parametros({ de, ate })}`);
-    const semDados = r.faturamentoTotal === 0 && r.custoTotal === 0;
+    const semDados = !opcoes.meses.length;
     document.getElementById('primeiros-passos').hidden = !semDados;
+    if (!semDados) mostrarAviso(aviso, faltaNoPeriodo(opcoes), '');
 
     const classe = r.situacao === 'dentro' ? 'bom' : r.situacao === 'fora' || r.situacao === 'sem_faturamento' ? 'ruim' : '';
     const outros = [r.semFaturamento && `${r.semFaturamento} sem faturamento`, r.semLojas && `${r.semLojas} sem lojas`].filter(Boolean);
@@ -39,7 +42,7 @@ async function carregar() {
 
 (async () => {
   await iniciarPagina();
-  const opcoes = await api('/api/opcoes');
+  opcoes = await api('/api/opcoes');
   document.getElementById('meta-texto').textContent = `O promotor "se paga" quando custa até ${pct(opcoes.meta)} do faturamento das lojas que atende.`;
   montarPeriodo(opcoes, carregar);
   carregar();

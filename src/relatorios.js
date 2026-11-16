@@ -159,8 +159,9 @@ async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
 
 // Listas usadas nos filtros das telas.
 async function opcoes() {
-  const [meses, empresas, agencias, promotores, lojas] = await Promise.all([
-    consulta('SELECT mes FROM faturamento UNION SELECT mes FROM visitas ORDER BY mes'),
+  const [mesesFat, mesesVis, empresas, agencias, promotores, lojas] = await Promise.all([
+    consulta('SELECT DISTINCT mes FROM faturamento ORDER BY mes'),
+    consulta('SELECT DISTINCT mes FROM visitas ORDER BY mes'),
     consulta("SELECT DISTINCT empresa FROM faturamento WHERE empresa <> '' ORDER BY empresa"),
     consulta("SELECT agencia FROM promotores WHERE agencia <> '' UNION SELECT empresa FROM promotores WHERE empresa <> '' ORDER BY 1"),
     consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome'),
@@ -168,7 +169,10 @@ async function opcoes() {
   ]);
   return {
     meta: config.meta,
-    meses: meses.map((m) => m.mes),
+    // Meses que têm cada tipo de dado. O Resumo só faz sentido num mês que tenha os dois.
+    mesesFaturamento: mesesFat.map((m) => m.mes),
+    mesesAtendimentos: mesesVis.map((m) => m.mes),
+    meses: [...new Set([...mesesFat, ...mesesVis].map((m) => m.mes))].sort(),
     empresas: empresas.map((e) => e.empresa),
     agencias: agencias.map((a) => a.agencia),
     promotores,

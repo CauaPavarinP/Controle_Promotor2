@@ -72,7 +72,6 @@ CREATE TABLE IF NOT EXISTS promotores (
   ativo           BOOLEAN NOT NULL DEFAULT TRUE,
   criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS promotores_nome_unico ON promotores (lower(nome));
 
 CREATE TABLE IF NOT EXISTS importacoes (
   id          SERIAL PRIMARY KEY,

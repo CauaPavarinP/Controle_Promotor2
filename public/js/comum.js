@@ -103,8 +103,10 @@ function montarPeriodo(opcoes, aoMudar) {
   const html = meses.reverse().map((m) => `<option value="${m}">${rotuloMes(m)}</option>`).join('');
   de.innerHTML = html;
   ate.innerHTML = html;
-  // Abre no último período usado; se não houver, no mês mais recente que tem dados.
-  const padrao = opcoes.meses.at(-1) || mesAtual;
+  // Abre no último período usado; se não houver, no mês mais recente que tem faturamento E atendimentos
+  // (é o único em que dá para comparar custo com faturamento); se nenhum tiver os dois, no mais recente com dados.
+  const completos = opcoes.mesesFaturamento.filter((m) => opcoes.mesesAtendimentos.includes(m));
+  const padrao = completos.at(-1) || opcoes.meses.at(-1) || mesAtual;
   de.value = meses.includes(lembrado('periodo-de')) ? lembrado('periodo-de') : padrao;
   ate.value = meses.includes(lembrado('periodo-ate')) ? lembrado('periodo-ate') : padrao;
 
@@ -144,4 +146,23 @@ function parametros(objeto) {
   const p = new URLSearchParams();
   for (const [chave, valor] of Object.entries(objeto)) if (valor !== '' && valor !== undefined && valor !== null) p.set(chave, valor);
   return p.toString();
+}
+
+// Explica quando falta um dos dois tipos de dado no período (faturamento ou atendimentos).
+// Sem isso a tela mostraria só zeros, parecendo quebrada. Devolve '' quando o período tem os dois.
+function faltaNoPeriodo(opcoes) {
+  const { de, ate } = periodoAtual();
+  const noPeriodo = (meses) => meses.some((m) => m >= de && m <= ate);
+  const periodo = de === ate ? rotuloMes(de) : `${rotuloMes(de)} a ${rotuloMes(ate)}`;
+  const onde = (meses) => (meses.length ? `Há dados em: ${meses.map(rotuloMes).join(', ')}.` : 'Ainda não foi importado nenhum.');
+  const faltas = [];
+  if (!noPeriodo(opcoes.mesesAtendimentos)) faltas.push(`Não há atendimentos de promotores em ${periodo}. ${onde(opcoes.mesesAtendimentos)}`);
+  if (!noPeriodo(opcoes.mesesFaturamento)) faltas.push(`Não há faturamento em ${periodo}. ${onde(opcoes.mesesFaturamento)}`);
+  // Tem os dois no período, mas em meses diferentes: a comparação é feita mês a mês, então também não fecha.
+  const juntos = opcoes.mesesAtendimentos.some((m) => m >= de && m <= ate && opcoes.mesesFaturamento.includes(m));
+  if (!faltas.length && !juntos) {
+    faltas.push(`Em ${periodo}, o faturamento e os atendimentos estão em meses diferentes (faturamento: ${opcoes.mesesFaturamento.map(rotuloMes).join(', ')}; atendimentos: ${opcoes.mesesAtendimentos.map(rotuloMes).join(', ')}). O custo de um mês só é comparado com o faturamento do mesmo mês.`);
+  }
+  if (!faltas.length) return '';
+  return `${faltas.join(' ')} Para comparar custo com faturamento, escolha um período que tenha os dois ou importe o que falta.`;
 }
