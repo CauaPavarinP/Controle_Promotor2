@@ -223,6 +223,10 @@ async function confirmar() {
     el('conferencia').hidden = true;
     el('arquivo').value = '';
     estado = null;
+    // Os dados mudaram: apaga o que a aba lembrava, para as outras telas buscarem tudo de novo.
+    const eu = guardado('eu');
+    esquecerTudo();
+    if (eu) guardar('eu', eu);
     await carregarListas();
   } catch (erro) {
     mostrarAviso(aviso, erro.message);
@@ -234,8 +238,8 @@ async function confirmar() {
 }
 
 async function carregarListas() {
-  const [opcoes, historico] = await Promise.all([api('/api/opcoes'), api('/api/importacoes')]);
-  el('promotor').innerHTML = `<option value="">Escolha…</option>${opcoes.promotores.map((p) => `<option value="${p.id}">${esc(p.nome)} (${esc(TIPOS[p.tipo])}${p.agencia && p.agencia !== p.nome ? ` · ${esc(p.agencia)}` : ''})</option>`).join('')}<option value="novo">+ Cadastrar novo promotor ou agência</option>`;
+  const [opcoes, promotores, historico] = await Promise.all([api('/api/opcoes'), api('/api/promotores-nomes'), api('/api/importacoes')]);
+  el('promotor').innerHTML = `<option value="">Escolha…</option>${promotores.map((p) => `<option value="${p.id}">${esc(p.nome)} (${esc(TIPOS[p.tipo])}${p.agencia && p.agencia !== p.nome ? ` · ${esc(p.agencia)}` : ''})</option>`).join('')}<option value="novo">+ Cadastrar novo promotor ou agência</option>`;
   el('lista-empresas').innerHTML = opcoes.empresas.map((e) => `<option value="${esc(e)}"></option>`).join('');
   el('historico').innerHTML = historico.map((h) => `
     <tr>

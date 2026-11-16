@@ -16,7 +16,7 @@ async function carregar() {
   const aviso = document.getElementById('aviso');
   mostrarAviso(aviso, opcoesDaTela ? faltaNoPeriodo(opcoesDaTela) : '', '');
   try {
-    const { promotores } = await api(`/api/promotores?${parametros(filtros())}`);
+    await apiComMemoria(`/api/promotores?${parametros(filtros())}`, ({ promotores }) => {
     paginas.mostrar(promotores.map((p) => `
       <tr class="clicavel" data-id="${p.id}">
         <td><a href="/promotor?id=${p.id}">${esc(p.nome)}</a>${p.ativo ? '' : ' <span class="etiqueta">Inativo</span>'}</td>
@@ -28,6 +28,7 @@ async function carregar() {
         <td class="num">${pct(p.percentual)}</td>
         <td>${etiqueta(p.situacao)}</td>
       </tr>`), '<tr><td colspan="8" class="vazio">Nenhum promotor encontrado.</td></tr>', 'promotores');
+    });
   } catch (erro) {
     mostrarAviso(aviso, erro.message);
   }
@@ -35,7 +36,7 @@ async function carregar() {
 
 (async () => {
   await iniciarPagina();
-  const opcoes = await api('/api/opcoes');
+  const opcoes = await carregarOpcoes();
   opcoesDaTela = opcoes;
   document.getElementById('agencia').insertAdjacentHTML('beforeend', opcoes.agencias.map((a) => `<option>${esc(a)}</option>`).join(''));
   // O Resumo manda para cá já filtrando (ex.: /promotores?situacao=fora).

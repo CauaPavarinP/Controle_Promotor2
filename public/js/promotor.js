@@ -59,8 +59,7 @@ async function carregar(manterPagina = false) {
 
 (async () => {
   await iniciarPagina();
-  const opcoes = await api('/api/opcoes');
-  lojasCadastradas = opcoes.lojas;
+  const opcoes = await carregarOpcoes();
   paginas = criarPaginacao('linhas', 'paginacao');
   montarPeriodo(opcoes, () => carregar());
   await carregar();
@@ -83,10 +82,14 @@ async function carregar(manterPagina = false) {
 
   // Lançar visita manualmente.
   const janela = document.getElementById('janela-visita');
-  const texto = (l) => (l.cnpj ? `${l.nome} — ${cnpjFormatado(l.cnpj)}` : l.nome);
-  document.getElementById('lista-lojas').innerHTML = lojasCadastradas.map((l) => `<option value="${esc(texto(l))}"></option>`).join('');
+  const texto = (l) => (l.cnpj ? `${l.nome} — ${cnpjFormatado(l.cnpj)}` : `${l.nome}${l.cidade ? ` — ${l.cidade}` : ''} (#${l.id})`);
   document.getElementById('v-mes').innerHTML = ultimosMeses().map((m) => `<option value="${m}">${rotuloMes(m)}</option>`).join('');
-  document.getElementById('lancar').addEventListener('click', () => {
+  document.getElementById('lancar').addEventListener('click', async () => {
+    // A lista de lojas é grande: só é buscada na primeira vez que a janela abre.
+    if (!lojasCadastradas.length) {
+      lojasCadastradas = await api('/api/lojas');
+      document.getElementById('lista-lojas').innerHTML = lojasCadastradas.map((l) => `<option value="${esc(texto(l))}"></option>`).join('');
+    }
     document.getElementById('form-visita').reset();
     document.getElementById('v-mes').value = periodoAtual().ate;
     mostrarAviso(document.getElementById('aviso-visita'), '');

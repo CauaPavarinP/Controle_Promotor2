@@ -157,15 +157,13 @@ async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   );
 }
 
-// Listas usadas nos filtros das telas.
+// Listas usadas nos filtros das telas. É chamada em toda troca de tela, então traz só o que é pequeno.
 async function opcoes() {
-  const [mesesFat, mesesVis, empresas, agencias, promotores, lojas] = await Promise.all([
+  const [mesesFat, mesesVis, empresas, agencias] = await Promise.all([
     consulta('SELECT DISTINCT mes FROM faturamento ORDER BY mes'),
     consulta('SELECT DISTINCT mes FROM visitas ORDER BY mes'),
     consulta("SELECT DISTINCT empresa FROM faturamento WHERE empresa <> '' ORDER BY empresa"),
     consulta("SELECT agencia FROM promotores WHERE agencia <> '' UNION SELECT empresa FROM promotores WHERE empresa <> '' ORDER BY 1"),
-    consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome'),
-    consulta('SELECT id, nome, cnpj FROM lojas ORDER BY nome'),
   ]);
   return {
     meta: config.meta,
@@ -175,9 +173,11 @@ async function opcoes() {
     meses: [...new Set([...mesesFat, ...mesesVis].map((m) => m.mes))].sort(),
     empresas: empresas.map((e) => e.empresa),
     agencias: agencias.map((a) => a.agencia),
-    promotores,
-    lojas,
   };
 }
 
-module.exports = { resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, salvarPromotor, salvarVisita, opcoes };
+// Listas grandes, pedidas só pela tela que precisa delas (antes vinham junto das opções e pesavam em toda tela).
+const listaDeLojas = () => consulta('SELECT id, nome, cnpj, cidade FROM lojas ORDER BY nome');
+const nomesDosPromotores = () => consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome');
+
+module.exports = { resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores };

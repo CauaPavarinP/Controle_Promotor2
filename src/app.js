@@ -62,6 +62,8 @@ function criarApp() {
 
   api.get('/eu', (req, res) => res.json(req.usuario));
   api.get('/opcoes', async (req, res) => res.json(await relatorios.opcoes()));
+  api.get('/lojas', async (req, res) => res.json(await relatorios.listaDeLojas()));
+  api.get('/promotores-nomes', async (req, res) => res.json(await relatorios.nomesDosPromotores()));
   api.post('/conta/senha', async (req, res) => {
     await auth.trocarPropriaSenha(req.usuario.id, req.body.senhaAtual, req.body.senhaNova);
     res.json({ ok: true });

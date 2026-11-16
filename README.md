@@ -68,6 +68,10 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **bcryptjs + cookie-session**: login com senha criptografada
 - **exceljs**: leitura e geração de planilhas
 
+## Por que as telas não "piscam" ao trocar
+
+Cada item do menu é uma página separada. Para a página nova não nascer vazia, o navegador guarda na memória da aba (`sessionStorage`) a última resposta do servidor para o menu, os filtros e as listas de Resumo, Faturamento e Promotores. A tela aparece na hora com esses dados e, em seguida, confere com o servidor e atualiza se algo mudou. Essa memória é apagada ao sair do sistema, ao fechar a aba e depois de cada importação. A ficha do promotor (que tem salário) não é guardada.
+
 ## Organização do código
 
 | Arquivo | Responsabilidade |

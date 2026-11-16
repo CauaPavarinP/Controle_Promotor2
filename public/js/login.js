@@ -1,4 +1,5 @@
 // Tela de login.
+esquecerTudo(); // quem chega aqui não está logado: apaga o que a aba lembrava do usuário anterior
 document.getElementById('form').addEventListener('submit', async (evento) => {
   evento.preventDefault();
   const aviso = document.getElementById('aviso');

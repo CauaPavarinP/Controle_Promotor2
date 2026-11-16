@@ -53,9 +53,39 @@ function mostrarAviso(elemento, texto, tipo = 'erro') {
 function lembrar(chave, valor) { try { localStorage.setItem(chave, valor); } catch { /* sem armazenamento */ } }
 function lembrado(chave) { try { return localStorage.getItem(chave); } catch { return null; } }
 
-// Monta o menu lateral e devolve o usuário logado. Toda tela (menos o login) chama isto primeiro.
-async function iniciarPagina() {
-  const usuario = await api('/api/eu');
+// ---------- Memória da aba ----------
+// Cada clique no menu abre uma página nova. Para ela não nascer vazia e "piscar", guardamos na memória
+// da aba (sessionStorage) a última resposta do servidor: a tela aparece na hora com o que já sabíamos
+// e, logo em seguida, confere com o servidor e atualiza se algo mudou.
+// Essa memória some ao fechar a aba e é apagada ao sair do sistema.
+function guardar(chave, valor) {
+  try {
+    const texto = JSON.stringify(valor);
+    if (texto.length < 1500000) sessionStorage.setItem(`memoria:${chave}`, texto); // respostas enormes não são guardadas
+    else sessionStorage.removeItem(`memoria:${chave}`);
+  } catch { /* sem armazenamento: o sistema funciona igual, só sem o atalho */ }
+}
+function guardado(chave) {
+  try { return JSON.parse(sessionStorage.getItem(`memoria:${chave}`)); } catch { return null; }
+}
+function esquecerTudo() {
+  try { sessionStorage.clear(); } catch { /* sem armazenamento */ }
+}
+
+// Busca uma lista no servidor e manda desenhar. Se já temos a resposta anterior guardada, desenha com ela
+// primeiro (na hora) e redesenha quando a resposta nova chegar, se for diferente.
+let ultimaBusca = 0;
+async function apiComMemoria(url, desenhar) {
+  const minhaVez = ++ultimaBusca;
+  const antigo = guardado(url);
+  if (antigo) desenhar(antigo);
+  const novo = await api(url);
+  guardar(url, novo);
+  // Se a pessoa já mudou o filtro de novo, esta resposta ficou velha: não desenha por cima da mais nova.
+  if (minhaVez === ultimaBusca && JSON.stringify(novo) !== JSON.stringify(antigo)) desenhar(novo);
+}
+
+function desenharMenu(usuario) {
   const paginas = [
     ['/resumo', 'Resumo'], ['/faturamento', 'Faturamento'], ['/promotores', 'Promotores'], ['/importar', 'Importar'],
   ];
@@ -73,9 +103,34 @@ async function iniciarPagina() {
   document.getElementById('sair').addEventListener('click', async (evento) => {
     evento.preventDefault();
     await api('/api/logout', { method: 'POST' });
+    esquecerTudo();
     location.href = '/login';
   });
-  return usuario;
+}
+
+// Monta o menu lateral e devolve o usuário logado. Toda tela (menos o login) chama isto primeiro.
+// Se já sabemos quem é o usuário, o menu aparece na hora e a conferência com o servidor roda em segundo
+// plano (se o login tiver expirado, "api" manda para a tela de login).
+async function iniciarPagina() {
+  const conhecido = guardado('eu');
+  const conferir = api('/api/eu').then((usuario) => {
+    if (JSON.stringify(usuario) !== JSON.stringify(conhecido)) { guardar('eu', usuario); desenharMenu(usuario); }
+    return usuario;
+  });
+  if (!conhecido) return conferir;
+  desenharMenu(conhecido);
+  conferir.catch(() => {});
+  return conhecido;
+}
+
+// Listas dos filtros (meses com dados, empresas, agências, meta). Usa a resposta guardada, se houver,
+// e já busca uma nova para a próxima tela. Depois de uma importação a memória é apagada (ver importar.js).
+async function carregarOpcoes() {
+  const conhecidas = guardado('opcoes');
+  const buscar = api('/api/opcoes').then((opcoes) => { guardar('opcoes', opcoes); return opcoes; });
+  if (!conhecidas) return buscar;
+  buscar.catch(() => {});
+  return conhecidas;
 }
 
 // Preenche os dois seletores de período (De / Até) e chama "aoMudar" sempre que o período mudar.

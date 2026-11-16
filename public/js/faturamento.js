@@ -14,7 +14,7 @@ async function carregar() {
   const aviso = document.getElementById('aviso');
   mostrarAviso(aviso, opcoesDaTela ? faltaNoPeriodo(opcoesDaTela) : '', '');
   try {
-    const { lojas, totais } = await api(`/api/faturamento?${parametros(filtros())}`);
+    await apiComMemoria(`/api/faturamento?${parametros(filtros())}`, ({ lojas, totais }) => {
     paginas.mostrar(lojas.map((l) => `
       <tr>
         <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}</span></td>
@@ -29,6 +29,7 @@ async function carregar() {
     document.getElementById('totais').innerHTML = lojas.length ? `
       <tr><td>Total (${lojas.length} lojas)</td><td></td><td class="num">${reais(totais.faturamento)}</td><td class="num">${totais.visitas}</td>
       <td class="num">${reais(totais.custo)}</td><td class="num">${pct(pctTotal)}</td><td></td></tr>` : '';
+    });
   } catch (erro) {
     mostrarAviso(aviso, erro.message);
   }
@@ -36,7 +37,7 @@ async function carregar() {
 
 (async () => {
   await iniciarPagina();
-  const opcoes = await api('/api/opcoes');
+  const opcoes = await carregarOpcoes();
   opcoesDaTela = opcoes;
   document.getElementById('empresa').insertAdjacentHTML('beforeend', opcoes.empresas.map((e) => `<option>${esc(e)}</option>`).join(''));
   paginas = criarPaginacao('linhas', 'paginacao');
