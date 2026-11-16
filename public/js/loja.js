@@ -1,5 +1,5 @@
 // Ficha da loja: faturamento mês a mês e os promotores que a atendem. Abre ao clicar numa loja em Faturamento.
-const idLoja = Number(new URLSearchParams(location.search).get('id'));
+let idLoja = null;
 let paginas = null;
 let opcoes = null;
 
@@ -51,6 +51,8 @@ async function carregar() {
 
 (async () => {
   await iniciarPagina();
+  idLoja = idDoEndereco('Loja');
+  if (!idLoja) return;
   opcoes = await carregarOpcoes();
   paginas = criarPaginacao('linhas', 'paginacao', 12);
   montarPeriodo(opcoes, carregar);

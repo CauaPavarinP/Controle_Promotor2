@@ -101,6 +101,10 @@ test('CLT com salário e sem nenhuma loja lançada: o custo conta e a situação
   assert.equal(r.promotores.length, 2); // o admitido depois e o inativo não entram
   assert.equal(r.resumo.custoTotal, 2600);
   assert.equal(r.resumo.custoSemLojas, 2500);
+  // O percentual geral compara só o custo que tem loja (100) com o faturamento dessas lojas (10000).
+  assert.equal(r.resumo.custoComLojas, 100);
+  assert.equal(r.resumo.percentual, 1);
+  assert.equal(r.resumo.situacao, 'dentro');
   assert.equal(r.resumo.semLojas, 1);
   assert.equal(r.resumo.dentro, 1);
 });

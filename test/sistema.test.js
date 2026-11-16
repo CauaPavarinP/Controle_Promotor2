@@ -45,7 +45,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
 
   const anonimo = sessao();
   assert.equal((await anonimo('/api/resumo?de=2026-10&ate=2026-10')).status, 401);
-  assert.equal((await anonimo('/api/login', { method: 'POST', json: { login: 'suporte', senha: 'errada' } })).status, 400);
+  assert.equal((await anonimo('/api/login', { method: 'POST', json: { login: 'suporte', senha: 'errada' } })).status, 401);
 
   const suporte = sessao();
   assert.equal((await suporte('/api/login', { method: 'POST', json: { login: 'suporte', senha: 'senha-suporte' } })).status, 200);
@@ -174,6 +174,77 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     await iniciarBanco();
   });
 
+  await t.test('endereço ou corpo inválido responde 400, sem revelar detalhes do banco', async () => {
+    const periodo = 'de=2026-10&ate=2026-10';
+    for (const caminho of [`/api/lojas/abc?${periodo}`, `/api/lojas/99999999999999999999?${periodo}`, `/api/lojas/-1?${periodo}`, `/api/lojas/0?${periodo}`,
+      `/api/promotores/abc?${periodo}`, `/api/promotores/1.5?${periodo}`]) {
+      const r = await regis(caminho);
+      assert.equal(r.status, 400, caminho);
+      assert.doesNotMatch(r.dados.erro, /integer|syntax|range|NaN|column|relation/i, caminho);
+    }
+    assert.equal((await regis('/api/visitas/abc', { method: 'DELETE' })).status, 400);
+    assert.equal((await suporte('/api/usuarios/abc', { method: 'DELETE' })).status, 400);
+    // Corpo que não é JSON (ou vazio) não pode derrubar a rota.
+    const texto = { method: 'POST', body: 'senhaAtual=x', headers: { 'content-type': 'text/plain' } };
+    assert.equal((await regis('/api/conta/senha', texto)).status, 400);
+    assert.equal((await regis('/api/conta/senha', { method: 'POST' })).status, 400);
+    assert.equal((await regis('/api/promotores', texto)).status, 400);
+    assert.equal((await regis('/api/visitas', texto)).status, 400);
+    assert.equal((await regis('/api/importar/gravar', texto)).status, 400);
+    assert.equal((await regis('/api/importar/converter', texto)).status, 400);
+    assert.equal((await regis('/api/conta/senha', { method: 'POST', body: '{quebrado', headers: { 'content-type': 'application/json' } })).status, 400);
+    assert.equal((await regis('/api/visitas', { method: 'POST', json: { promotorId: 99999999999999999999, lojaId: 'x', mes: '2026-10', visitas: 1 } })).status, 400);
+    assert.equal((await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', itens: [null] } })).status, 400);
+    assert.equal((await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'faturamento', itens: [{ loja: null, mes: '2026-10', valor: 1 }] } })).status, 400);
+  });
+
+  await t.test('erro inesperado devolve só a mensagem genérica', async () => {
+    const original = console.error;
+    const registrado = [];
+    console.error = (...partes) => registrado.push(partes);
+    try {
+      // "empresa" com um caractere que o banco não aceita provoca um erro de verdade no PostgreSQL.
+      const r = await regis('/api/faturamento?de=2026-10&ate=2026-10&empresa=%00');
+      assert.equal(r.status, 500);
+      assert.match(r.dados.erro, /^Erro interno\. Tente de novo; se continuar, avise o suporte e informe o código [0-9A-Z]+\.$/);
+      assert.equal(registrado.length, 1); // o detalhe foi para o log do servidor
+    } finally {
+      console.error = original;
+    }
+  });
+
+  await t.test('as telas só abrem com login; a de Usuários, só para o suporte', async () => {
+    const abrir = (chamar, caminho) => chamar(caminho, { redirect: 'manual' });
+    for (const tela of ['/resumo', '/faturamento', '/loja', '/promotores', '/promotor', '/importar', '/usuarios', '/conta', '/usuarios.html', '/resumo/']) {
+      const r = await fetch(base + tela, { redirect: 'manual' });
+      assert.deepEqual([r.status, r.headers.get('location')], [302, '/login'], tela);
+    }
+    assert.equal((await fetch(`${base}/login`, { redirect: 'manual' })).status, 200);
+    assert.equal((await fetch(`${base}/css/estilo.css`)).status, 200); // o visual do login continua acessível
+    assert.equal((await abrir(regis, '/resumo')).status, 200);
+    assert.equal((await abrir(regis, '/usuarios')).status, 302);
+    assert.equal((await abrir(suporte, '/usuarios')).status, 200);
+    assert.equal((await abrir(suporte, '/login')).status, 302); // já logado: vai direto para o sistema
+  });
+
+  await t.test('desfazer importação apaga só o que veio dela; excluir promotor leva os atendimentos', async () => {
+    const item = (valor) => ({ loja: { nome: 'Loja Desfazer', cnpj: '', cidade: 'X' }, mes: '2026-07', empresa: '', valor });
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'faturamento', arquivo: 'a', itens: [item(100)] } });
+    const antes = (await regis('/api/importacoes')).dados[0];
+    assert.equal(antes.total, 100);
+    assert.equal((await regis('/api/faturamento?de=2026-07&ate=2026-07')).dados.totais.faturamento, 100);
+    const r = await regis(`/api/importacoes/${antes.id}`, { method: 'DELETE' });
+    assert.deepEqual([r.status, r.dados.registros], [200, 1]);
+    assert.equal((await regis('/api/faturamento?de=2026-07&ate=2026-07')).dados.totais.faturamento, 0);
+    assert.equal((await regis(`/api/importacoes/${antes.id}`, { method: 'DELETE' })).status, 404);
+
+    const pedro = (await regis('/api/promotores?de=2026-10&ate=2026-10&busca=PEDRO')).dados.promotores[0];
+    assert.equal(pedro.qtdLojas, 1);
+    assert.equal((await regis(`/api/promotores/${pedro.id}`, { method: 'DELETE' })).status, 200);
+    assert.equal((await regis('/api/promotores?de=2026-10&ate=2026-10&busca=PEDRO')).dados.promotores.length, 0);
+    assert.equal((await regis(`/api/promotores/${pedro.id}`, { method: 'DELETE' })).status, 404);
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
@@ -184,5 +255,17 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     const [r] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'regis');
     await suporte(`/api/usuarios/${r.id}`, { method: 'PUT', json: { ativo: false } });
     assert.equal((await regis('/api/resumo?de=2026-10&ate=2026-10')).status, 401);
+  });
+
+  // Este é o último teste de propósito: ele bloqueia o IP da máquina de testes.
+  await t.test('bloqueio de login: por login (5 erros) e por IP (20 erros, mesmo trocando de login)', async () => {
+    const tentar = (login, senha = 'senha-errada') => anonimo('/api/login', { method: 'POST', json: { login, senha } });
+    // O login certo do suporte, lá no começo, zerou a contagem dele. 5 erros seguidos bloqueiam;
+    // a tentativa seguinte é barrada mesmo com a senha certa.
+    for (let i = 0; i < 5; i++) assert.equal((await tentar('suporte')).status, 401);
+    assert.equal((await tentar('suporte', 'senha-suporte')).status, 429);
+    // A mesma senha testada em logins diferentes. Este IP já errou 6 vezes (1 no começo + 5 agora); o limite é 20.
+    for (let i = 0; i < 14; i++) assert.equal((await tentar(`login-inventado-${i}`)).status, 401);
+    assert.equal((await tentar('outro-login-qualquer')).status, 429);
   });
 });

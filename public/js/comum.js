@@ -139,30 +139,17 @@ async function carregarOpcoes() {
 function montarPeriodo(opcoes, aoMudar) {
   const de = document.getElementById('periodo-de');
   const ate = document.getElementById('periodo-ate');
-  const hoje = new Date();
-  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
-  // Lista de meses: do mais antigo com dados (ou 12 meses atrás) até o mais recente (ou o mês atual).
-  const inicio = new Date(hoje.getFullYear(), hoje.getMonth() - 12, 1);
-  let primeiro = `${inicio.getFullYear()}-${String(inicio.getMonth() + 1).padStart(2, '0')}`;
-  let ultimo = mesAtual;
-  if (opcoes.meses.length) {
-    if (opcoes.meses[0] < primeiro) primeiro = opcoes.meses[0];
-    if (opcoes.meses.at(-1) > ultimo) ultimo = opcoes.meses.at(-1);
-  }
-  const meses = [];
-  let [ano, mes] = primeiro.split('-').map(Number);
-  while (`${ano}-${String(mes).padStart(2, '0')}` <= ultimo) {
-    meses.push(`${ano}-${String(mes).padStart(2, '0')}`);
-    mes++;
-    if (mes > 12) { mes = 1; ano++; }
-  }
+  const mesAtual = ultimosMeses(1)[0];
+  // A lista mostra só os meses que têm algum dado importado (faturamento ou atendimentos).
+  // Antes de qualquer importação, mostra o mês atual para a tela não ficar sem opção.
+  const meses = opcoes.meses.length ? [...opcoes.meses] : [mesAtual];
   const html = meses.reverse().map((m) => `<option value="${m}">${rotuloMes(m)}</option>`).join('');
   de.innerHTML = html;
   ate.innerHTML = html;
   // Abre no último período usado; se não houver, no mês mais recente que tem faturamento E atendimentos
   // (é o único em que dá para comparar custo com faturamento); se nenhum tiver os dois, no mais recente com dados.
   const completos = opcoes.mesesFaturamento.filter((m) => opcoes.mesesAtendimentos.includes(m));
-  const padrao = completos.at(-1) || opcoes.meses.at(-1) || mesAtual;
+  const padrao = completos.at(-1) || meses[0]; // "meses" está do mais recente para o mais antigo
   de.value = meses.includes(lembrado('periodo-de')) ? lembrado('periodo-de') : padrao;
   ate.value = meses.includes(lembrado('periodo-ate')) ? lembrado('periodo-ate') : padrao;
 
@@ -267,4 +254,13 @@ function criarPaginacao(idCorpo, idNavegacao, porPagina = 10) {
       desenhar();
     },
   };
+}
+
+// Lê o "?id=15" do endereço das fichas (loja e promotor). Se não for um número válido, mostra o aviso
+// e devolve null, para a tela não ficar em branco.
+function idDoEndereco(nomeDoItem) {
+  const texto = new URLSearchParams(location.search).get('id') || '';
+  if (/^\d{1,9}$/.test(texto) && Number(texto) > 0) return Number(texto);
+  mostrarAviso(document.getElementById('aviso'), `${nomeDoItem} não encontrada: o endereço desta página está incompleto ou errado. Volte para a lista e clique de novo.`);
+  return null;
 }

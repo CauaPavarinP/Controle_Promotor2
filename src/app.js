@@ -41,12 +41,35 @@ function criarApp() {
   const jsonPequeno = express.json({ limit: '200kb' });
   app.use((req, res, next) => (req.path === '/api/importar/gravar' ? next() : jsonPequeno(req, res, next)));
 
+  // Formulário enviado em outro formato (ou sem corpo) chega sem "req.body". Trocamos por um objeto vazio,
+  // para as validações responderem "faltou tal campo" (400) em vez de o código quebrar (500).
+  // As duas rotas de importação ficam de fora porque leem o corpo do jeito delas.
+  app.use((req, res, next) => {
+    if (req.body === undefined && !req.path.startsWith('/api/importar/')) req.body = {};
+    next();
+  });
+
   app.get('/', (req, res) => res.redirect('/resumo'));
+
+  // As telas só abrem para quem está logado (a de Usuários, só para o suporte). Os dados já eram protegidos
+  // pela API; isto evita que alguém sem login veja até a "casca" das telas.
+  app.get(/^\/(resumo|faturamento|loja|promotores|promotor|importar|usuarios|conta)(\.html)?\/?$/, async (req, res, next) => {
+    const usuario = await auth.usuarioDaSessao(req);
+    if (!usuario) return res.redirect('/login');
+    if (req.path.startsWith('/usuarios') && usuario.perfil !== 'suporte') return res.redirect('/resumo');
+    res.set('Cache-Control', 'no-store'); // não guardar a tela no navegador, para o "voltar" depois de sair não mostrá-la
+    next();
+  });
+  app.get(/^\/login(\.html)?\/?$/, async (req, res, next) => {
+    if (await auth.usuarioDaSessao(req)) return res.redirect('/resumo'); // já está logado
+    next();
+  });
   app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 
   // ---------- Login ----------
   app.post('/api/login', async (req, res) => {
     const usuario = await auth.entrar(req.body.login, req.body.senha, req.ip);
+    req.session = null; // começa uma sessão nova a cada login
     req.session = { usuarioId: usuario.id };
     res.json(usuario);
   });
@@ -59,6 +82,14 @@ function criarApp() {
   const api = express.Router();
   api.use(auth.exigirLogin);
   app.use('/api', api);
+
+  // Todo endereço com ":id" (ex.: /api/lojas/15) passa por aqui antes. O id tem que ser um número inteiro
+  // positivo que caiba na coluna do banco; "abc" ou um número gigante recebem 400 sem nem consultar o banco.
+  api.param('id', (req, res, next, valor) => {
+    const id = /^\d{1,10}$/.test(valor) ? Number(valor) : 0;
+    if (id < 1 || id > 2147483647) return res.status(400).json({ erro: 'Endereço inválido: o código informado não é um número válido.' });
+    next();
+  });
 
   api.get('/eu', (req, res) => res.json(req.usuario));
   api.get('/opcoes', async (req, res) => res.json(await relatorios.opcoes()));
@@ -89,6 +120,12 @@ function criarApp() {
 
   api.post('/visitas', async (req, res) => {
     await relatorios.salvarVisita(req.body);
+    res.json({ ok: true });
+  });
+  api.delete('/promotores/:id', async (req, res) => {
+    // Apaga o promotor e os atendimentos dele (as lojas e o faturamento continuam).
+    const apagados = await consulta('DELETE FROM promotores WHERE id = $1 RETURNING id', [Number(req.params.id)]);
+    if (!apagados.length) return res.status(404).json({ erro: 'Promotor não encontrado.' });
     res.json({ ok: true });
   });
   api.delete('/visitas/:id', async (req, res) => {
@@ -182,9 +219,23 @@ function criarApp() {
   });
 
   api.post('/importar/gravar', express.json({ limit: '50mb' }), async (req, res) => {
-    const gravar = { faturamento: gravarFaturamento, visitas: gravarVisitas, promotores: gravarPromotores }[req.body.tipo];
+    const dados = req.body && typeof req.body === 'object' ? req.body : {}; // corpo que não é JSON chega vazio
+    const gravar = { faturamento: gravarFaturamento, visitas: gravarVisitas, promotores: gravarPromotores }[dados.tipo];
     if (!gravar) throw new ErroDeImportacao('Tipo de importação inválido.');
-    res.json(await gravar(req.body, req.usuario.nome));
+    res.json(await gravar(dados, req.usuario.nome));
+  });
+
+  // Desfaz uma importação: apaga o faturamento ou os atendimentos que ela gravou e que ainda são dela
+  // (o que uma importação mais nova substituiu já pertence à mais nova e não é apagado).
+  // Lojas e promotores cadastrados por ela continuam no sistema.
+  api.delete('/importacoes/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    const [importacao] = await consulta('SELECT tipo FROM importacoes WHERE id = $1', [id]);
+    if (!importacao) return res.status(404).json({ erro: 'Importação não encontrada.' });
+    const tabela = { faturamento: 'faturamento', visitas: 'visitas' }[importacao.tipo];
+    const apagados = tabela ? await consulta(`DELETE FROM ${tabela} WHERE importacao_id = $1 RETURNING id`, [id]) : [];
+    await consulta('DELETE FROM importacoes WHERE id = $1', [id]);
+    res.json({ ok: true, registros: apagados.length });
   });
 
   api.get('/importacoes', async (req, res) => {
@@ -206,17 +257,17 @@ function criarApp() {
   app.use('/api', (req, res) => res.status(404).json({ erro: 'Endereço não encontrado.' }));
 
   // ---------- Erros ----------
-  // Erros "esperados" (validação) voltam com a mensagem para a tela. O resto vira erro genérico e vai para o log.
+  // Erros "esperados" (validação) voltam com a mensagem para a tela. Qualquer outro erro vira uma mensagem
+  // genérica: o detalhe (que pode revelar o banco e a estrutura do sistema) vai SÓ para o log do servidor,
+  // junto com um código curto que a pessoa pode informar ao suporte para achar a linha no log.
   app.use((erro, req, res, next) => { // eslint-disable-line no-unused-vars
-    if (erro instanceof auth.ErroDeValidacao || erro instanceof ErroDeImportacao) return res.status(400).json({ erro: erro.message });
+    if (erro instanceof auth.ErroDeValidacao || erro instanceof ErroDeImportacao) return res.status(erro.status || 400).json({ erro: erro.message });
     if (erro.type === 'entity.too.large' && req.path === '/api/importar/gravar') return res.status(413).json({ erro: 'Importação grande demais para uma vez só. Divida o arquivo por período.' });
     if (erro.type === 'entity.too.large') return res.status(413).json({ erro: 'Arquivo .xlsx grande demais (máximo 25 MB). Salve como .csv e importe de novo: .csv e o .xls do Focco não têm limite.' });
-    if (erro.type === 'entity.parse.failed') return res.status(400).json({ erro: 'Dados inválidos.' });
-    console.error(erro);
-    // Em produção a tela mostra só uma mensagem genérica (o detalhe fica no log do servidor).
-    // Rodando no computador (desenvolvimento), mostramos o detalhe para facilitar achar o problema.
-    const detalhe = config.producao ? '' : ` Detalhe: ${erro.message}`;
-    res.status(500).json({ erro: `Erro interno. Tente de novo; se continuar, avise o suporte.${detalhe}` });
+    if (erro.status >= 400 && erro.status < 500) return res.status(400).json({ erro: 'Dados inválidos.' }); // JSON malformado, codificação errada etc.
+    const codigo = Date.now().toString(36).toUpperCase();
+    console.error(`[erro ${codigo}] ${req.method} ${req.path}`, erro);
+    res.status(500).json({ erro: `Erro interno. Tente de novo; se continuar, avise o suporte e informe o código ${codigo}.` });
   });
 
   return app;

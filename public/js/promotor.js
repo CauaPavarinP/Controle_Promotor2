@@ -1,5 +1,5 @@
 // Ficha do promotor: cadastro, custos e as lojas que visita no período.
-const idPromotor = Number(new URLSearchParams(location.search).get('id'));
+let idPromotor = null;
 let detalhe = null;
 let lojasCadastradas = [];
 
@@ -59,12 +59,25 @@ async function carregar(manterPagina = false) {
 
 (async () => {
   await iniciarPagina();
+  idPromotor = idDoEndereco('Ficha do promotor');
+  if (!idPromotor) return;
   const opcoes = await carregarOpcoes();
   paginas = criarPaginacao('linhas', 'paginacao');
   montarPeriodo(opcoes, () => carregar());
   await carregar();
 
   document.getElementById('editar').addEventListener('click', () => detalhe && abrirFormPromotor(detalhe.promotor, () => carregar(true)));
+  document.getElementById('excluir').addEventListener('click', async () => {
+    if (!detalhe) return;
+    if (!confirm(`Excluir o promotor "${detalhe.promotor.nome}" e TODOS os atendimentos dele (de todos os meses)? Isso não pode ser desfeito.`)) return;
+    try {
+      await api(`/api/promotores/${idPromotor}`, { method: 'DELETE' });
+      const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
+      location.href = '/promotores';
+    } catch (erro) {
+      mostrarAviso(document.getElementById('aviso'), erro.message);
+    }
+  });
 
   // Excluir as visitas de uma loja (no período escolhido).
   document.getElementById('linhas').addEventListener('click', async (evento) => {

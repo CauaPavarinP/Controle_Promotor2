@@ -8,6 +8,14 @@ const PERFIS = ['suporte', 'usuario'];
 
 class ErroDeValidacao extends Error {}
 
+// Erro que precisa de um código de resposta específico (401 = não autorizado, 429 = tentativas demais).
+class ErroDeAcesso extends ErroDeValidacao {
+  constructor(mensagem, status) {
+    super(mensagem);
+    this.status = status;
+  }
+}
+
 function validarSenha(senha) {
   if (typeof senha !== 'string' || senha.length < SENHA_MINIMA) {
     throw new ErroDeValidacao(`A senha precisa ter pelo menos ${SENHA_MINIMA} caracteres.`);
@@ -22,47 +30,67 @@ function limparLogin(login) {
   return limpo;
 }
 
-// ----- Proteção contra tentativa de adivinhar senha: 5 erros seguidos bloqueiam o login por 15 minutos -----
-const MAX_TENTATIVAS = 5;
+// ----- Proteção contra tentativa de adivinhar senha -----
+// Contamos os erros de duas formas, por 15 minutos:
+//  - por login + IP: 5 erros bloqueiam aquele login para aquele endereço (quem chuta a senha de UMA pessoa);
+//  - só por IP: 20 erros bloqueiam o endereço inteiro (quem testa a mesma senha em VÁRIOS logins).
+// Como o primeiro bloqueio vale só para o IP de quem errou, alguém de fora não consegue travar o login de
+// outra pessoa. Dentro da empresa todos saem pelo mesmo IP, então lá um colega ainda conseguiria; o bloqueio
+// dura só 15 minutos.
+const MAX_POR_LOGIN = 5;
+const MAX_POR_IP = 20;
 const BLOQUEIO_MS = 15 * 60 * 1000;
 const tentativas = new Map();
 // Hash de mentira, usado quando o login não existe (ver "entrar").
 const HASH_FALSO = bcrypt.hashSync('senha-que-ninguem-usa', 10);
 
-function estaBloqueado(chave) {
+function errosDe(chave) {
   const t = tentativas.get(chave);
-  if (!t) return false;
-  if (Date.now() - t.inicio > BLOQUEIO_MS) { tentativas.delete(chave); return false; }
-  return t.erros >= MAX_TENTATIVAS;
+  if (!t) return 0;
+  if (Date.now() - t.inicio > BLOQUEIO_MS) { tentativas.delete(chave); return 0; }
+  return t.erros;
 }
 
 function registrarErro(chave) {
-  const t = tentativas.get(chave);
-  if (!t || Date.now() - t.inicio > BLOQUEIO_MS) tentativas.set(chave, { erros: 1, inicio: Date.now() });
-  else t.erros++;
+  if (errosDe(chave) === 0) tentativas.set(chave, { erros: 1, inicio: Date.now() });
+  else tentativas.get(chave).erros++;
+  // Não deixa a lista crescer sem fim: de vez em quando joga fora os registros vencidos.
+  if (tentativas.size > 5000) for (const outra of [...tentativas.keys()]) errosDe(outra);
 }
 
 async function entrar(login, senha, ip) {
-  const chave = `${String(login || '').trim().toLowerCase()}|${ip}`;
-  if (estaBloqueado(chave)) throw new ErroDeValidacao('Muitas tentativas. Aguarde 15 minutos e tente de novo.');
-  const [usuario] = await consulta('SELECT * FROM usuarios WHERE login = $1', [String(login || '').trim().toLowerCase()]);
+  const loginLimpo = String(login || '').trim().toLowerCase().slice(0, 60);
+  const chaveIp = `ip|${ip}`;
+  const chaveLogin = `${loginLimpo}|${ip}`;
+  if (errosDe(chaveIp) >= MAX_POR_IP || errosDe(chaveLogin) >= MAX_POR_LOGIN) {
+    throw new ErroDeAcesso('Muitas tentativas. Aguarde 15 minutos e tente de novo.', 429);
+  }
+  const [usuario] = await consulta('SELECT * FROM usuarios WHERE login = $1', [loginLimpo]);
   // Compara a senha mesmo quando o usuário não existe, para a resposta demorar o mesmo tempo nos dois casos.
   const hash = usuario ? usuario.senha_hash : HASH_FALSO;
   const senhaCerta = await bcrypt.compare(String(senha || ''), hash);
   if (!usuario || !senhaCerta || !usuario.ativo) {
-    registrarErro(chave);
-    throw new ErroDeValidacao('Login ou senha incorretos.');
+    registrarErro(chaveIp);
+    registrarErro(chaveLogin);
+    throw new ErroDeAcesso('Login ou senha incorretos.', 401);
   }
-  tentativas.delete(chave);
+  tentativas.delete(chaveLogin);
   return { id: usuario.id, login: usuario.login, nome: usuario.nome, perfil: usuario.perfil };
 }
 
 // ----- Filtros das rotas -----
 
-// Confere a cada chamada se o usuário ainda existe e está ativo (se foi desativado, perde o acesso na hora).
-async function exigirLogin(req, res, next) {
+// Devolve o usuário logado (ou null). Confere no banco a cada chamada: se foi desativado, perde o acesso na hora.
+async function usuarioDaSessao(req) {
   const id = req.session && req.session.usuarioId;
-  const [usuario] = id ? await consulta('SELECT id, login, nome, perfil FROM usuarios WHERE id = $1 AND ativo', [id]) : [];
+  if (!Number.isInteger(id)) return null;
+  const [usuario] = await consulta('SELECT id, login, nome, perfil FROM usuarios WHERE id = $1 AND ativo', [id]);
+  return usuario || null;
+}
+
+// Para as rotas da API: sem login, responde 401.
+async function exigirLogin(req, res, next) {
+  const usuario = await usuarioDaSessao(req);
   if (!usuario) {
     req.session = null;
     return res.status(401).json({ erro: 'Faça login para continuar.' });
@@ -157,6 +185,6 @@ async function criarPrimeiroUsuario() {
 }
 
 module.exports = {
-  entrar, exigirLogin, exigirSuporte, listarUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
+  entrar, usuarioDaSessao, exigirLogin, exigirSuporte, listarUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
   trocarPropriaSenha, criarPrimeiroUsuario, ErroDeValidacao,
 };

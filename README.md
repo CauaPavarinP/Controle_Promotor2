@@ -26,7 +26,7 @@ Ficam todas em [`src/calculo.js`](src/calculo.js).
 2. **Custo do atendimento** (promotor + loja + mês):
    - se a planilha de atendimentos trouxe o valor da loja, vale o valor da planilha (agências e MEIs);
    - se não trouxe (caso dos CLTs), usa o **custo fixo mensal** do cadastro do promotor (salário + periculosidade + ajuda celular + ajuda de custo/alimentação + almoço + vale-transporte + gratificação + outros), dividido entre as lojas dele: na proporção das visitas ou, sem visitas informadas, em partes iguais.
-3. **Promotor com custo fixo e nenhuma loja lançada no mês:** o custo entra no total mesmo assim (o salário foi pago), com a situação *Sem lojas*. Vale só para os meses que já têm atendimentos importados, para promotores ativos e já admitidos naquele mês.
+3. **Promotor com custo fixo e nenhuma loja lançada no mês:** o custo entra no **custo total** mesmo assim (o salário foi pago), com a situação *Sem lojas*. Ele **não entra no percentual geral do Resumo**, que compara só o custo dos atendimentos com loja contra o faturamento dessas lojas; o valor sem loja aparece separado no card. Vale só para os meses que já têm atendimentos importados, para promotores ativos e já admitidos naquele mês.
 4. **Faturamento do promotor:** soma do faturamento das lojas **nos meses em que ele as atendeu**.
 5. **Duas pessoas na mesma loja:** o faturamento da loja conta inteiro para cada uma. Na tela Faturamento, o custo da loja é a soma dos dois.
 6. **Situações:** *Dentro da meta*, *Fora da meta*, *Sem faturamento* (teve custo, mas a loja não faturou no mês, ou a loja está sem CNPJ e não liga com o Focco), *Sem lojas*, *Sem dados* e *Sem promotor* (loja que faturou sem atendimento).
@@ -68,6 +68,19 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **PostgreSQL**: banco de dados
 - **bcryptjs + cookie-session**: login com senha criptografada
 - **exceljs**: leitura e geração de planilhas
+
+## Segurança
+
+- **Login:** senha guardada só como hash (bcrypt). 5 erros seguidos bloqueiam aquele login para aquele endereço IP por 15 minutos; 20 erros do mesmo IP (mesmo trocando de login) bloqueiam o IP. Resposta 401 para senha errada e 429 para bloqueio.
+- **Telas e API exigem login.** Sem login, as telas redirecionam para `/login` e a API responde 401. A tela e a API de usuários são só do perfil suporte.
+- **Erros inesperados** mostram só uma mensagem genérica com um código (ex.: `MI2K9QZ1`). O detalhe fica no log do servidor, na linha `[erro CÓDIGO]`.
+- **Entradas inválidas** (id que não é número, corpo que não é JSON, dados de importação malformados) recebem 400 antes de chegar ao banco.
+
+## Desfazer e excluir
+
+- **Importar → Desfazer:** apaga o faturamento ou os atendimentos que vieram daquele arquivo. O que uma importação mais nova substituiu continua. Lojas e promotores cadastrados continuam.
+- **Ficha do promotor → Excluir promotor:** apaga o promotor e todos os atendimentos dele.
+- O "Total" de cada linha em *Últimas importações* é o valor daquele arquivo. Como reimportar substitui, a soma dessa lista não é o total que está no sistema.
 
 ## Por que as telas não "piscam" ao trocar
 

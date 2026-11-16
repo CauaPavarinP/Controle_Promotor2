@@ -166,19 +166,25 @@ function calcular({ promotores, lojas, visitas, faturamentos, meta }) {
   for (const chave of lojaMesAtendida) faturamentoAtendido += fatLojaMes.get(chave) || 0;
 
   const contar = (s) => listaPromotores.filter((p) => p.situacao === s).length;
+  // O percentual geral compara só o que é comparável: o custo dos atendimentos que têm loja com o faturamento
+  // dessas lojas. O custo de quem não tem loja lançada (ex.: CLT sem atendimentos importados) aparece à parte,
+  // em "custoSemLojas"; se entrasse aqui, o percentual subiria sem que houvesse faturamento do outro lado.
+  const custoSemLojas = listaPromotores.reduce((soma, p) => soma + p.custoSemLoja, 0);
+  const custoComLojas = custoTotal - custoSemLojas;
   const resumo = {
     meta,
     faturamentoTotal: arredondar(faturamentoTotal),
     faturamentoAtendido: arredondar(faturamentoAtendido),
     custoTotal: arredondar(custoTotal),
-    percentual: percentual(custoTotal, faturamentoAtendido),
-    situacao: situacao(custoTotal, faturamentoAtendido, meta),
+    custoComLojas: arredondar(custoComLojas),
+    percentual: percentual(custoComLojas, faturamentoAtendido),
+    situacao: situacao(custoComLojas, faturamentoAtendido, meta),
     promotores: listaPromotores.length,
     dentro: contar('dentro'),
     fora: contar('fora'),
     semFaturamento: contar('sem_faturamento'),
     semLojas: contar('sem_lojas'),
-    custoSemLojas: arredondar(listaPromotores.reduce((soma, p) => soma + p.custoSemLoja, 0)),
+    custoSemLojas: arredondar(custoSemLojas),
   };
 
   return { resumo, promotores: listaPromotores, lojas: listaLojas };

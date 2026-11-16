@@ -241,14 +241,35 @@ async function carregarListas() {
   const [opcoes, promotores, historico] = await Promise.all([api('/api/opcoes'), api('/api/promotores-nomes'), api('/api/importacoes')]);
   el('promotor').innerHTML = `<option value="">Escolha…</option>${promotores.map((p) => `<option value="${p.id}">${esc(p.nome)} (${esc(TIPOS[p.tipo])}${p.agencia && p.agencia !== p.nome ? ` · ${esc(p.agencia)}` : ''})</option>`).join('')}<option value="novo">+ Cadastrar novo promotor ou agência</option>`;
   el('lista-empresas').innerHTML = opcoes.empresas.map((e) => `<option value="${esc(e)}"></option>`).join('');
+  // Muitos meses viram "jan/2026 a out/2026" para a coluna não esticar.
+  const resumoDosMeses = (texto) => {
+    const meses = texto.split(', ').filter(Boolean);
+    if (meses.length <= 2) return meses.map(rotuloMes).join(', ');
+    return `${rotuloMes(meses[0])} a ${rotuloMes(meses.at(-1))}`;
+  };
   el('historico').innerHTML = historico.map((h) => `
     <tr>
-      <td>${new Date(h.criado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td>
-      <td>${{ faturamento: 'Faturamento', visitas: 'Atendimentos', promotores: 'Cadastro de promotores' }[h.tipo] || esc(h.tipo)}</td>
-      <td>${esc(h.arquivo)}</td><td>${esc(h.usuario)}</td>
-      <td>${esc(h.meses.split(', ').filter(Boolean).map(rotuloMes).join(', '))}</td>
+      <td>${new Date(h.criado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}<span class="menor">${esc(h.usuario)}</span></td>
+      <td><span class="cortar" title="${esc(h.arquivo)}">${esc(h.arquivo)}</span><span class="menor">${{ faturamento: 'Faturamento', visitas: 'Atendimentos', promotores: 'Cadastro de promotores' }[h.tipo] || esc(h.tipo)}</span></td>
+      <td>${esc(resumoDosMeses(h.meses))}</td>
       <td class="num">${h.linhas}</td><td class="num">${h.ignoradas}</td><td class="num">${reais(h.total)}</td>
-    </tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhuma importação ainda.</td></tr>';
+      <td>${h.tipo === 'promotores' ? '' : `<button type="button" class="perigo pequeno" data-desfazer="${h.id}" data-nome="${esc(h.arquivo)}">Desfazer</button>`}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="vazio">Nenhuma importação ainda.</td></tr>';
+}
+
+// Desfaz uma importação: apaga do sistema o faturamento ou os atendimentos que vieram daquele arquivo.
+async function desfazer(evento) {
+  const botao = evento.target.closest('button[data-desfazer]');
+  if (!botao) return;
+  if (!confirm(`Desfazer a importação de "${botao.dataset.nome}"? Os dados que vieram desse arquivo serão apagados (o que uma importação mais nova substituiu continua).`)) return;
+  try {
+    const r = await api(`/api/importacoes/${botao.dataset.desfazer}`, { method: 'DELETE' });
+    const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
+    mostrarAviso(el('aviso'), `Importação desfeita: ${r.registros} registro(s) apagado(s).`, 'ok');
+    await carregarListas();
+  } catch (erro) {
+    mostrarAviso(el('aviso'), erro.message);
+  }
 }
 
 (async () => {
@@ -262,5 +283,6 @@ async function carregarListas() {
   el('promotor').addEventListener('change', ajustarExtras);
   el('novo-tipo').addEventListener('change', () => { el('novo-tipo').dataset.mexido = '1'; });
   el('confirmar').addEventListener('click', confirmar);
+  el('historico').addEventListener('click', desfazer);
   el('ajuda-tipo').textContent = AJUDA[el('tipo').value];
 })();

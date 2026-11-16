@@ -16,6 +16,7 @@ const texto = (v, tamanho) => String(v ?? '').replace(/\u0000/g, '').trim().slic
 const VALOR_MAXIMO = 999999999999.99;
 
 function conferirLoja(loja) {
+  if (!loja || typeof loja !== 'object') throw new ErroDeImportacao('Há um registro sem loja nos dados enviados.');
   const cnpj = String(loja?.cnpj ?? '').trim();
   if (cnpj && !/^\d{11,14}$/.test(cnpj)) throw new ErroDeImportacao('CNPJ inválido nos dados enviados.');
   const nome = texto(loja?.nome, 200);
@@ -47,6 +48,7 @@ function conferirNumero(valor, { minimo, nome }) {
 function conferirEnvio(dados) {
   if (!Array.isArray(dados?.itens) || !dados.itens.length) throw new ErroDeImportacao('Nenhuma linha válida no arquivo.');
   if (dados.itens.length > MAX_ITENS) throw new ErroDeImportacao('Arquivo com registros demais para uma importação só. Divida por período.');
+  if (dados.itens.some((item) => !item || typeof item !== 'object')) throw new ErroDeImportacao('Os dados enviados estão em formato inválido.');
   // "motivos" = por que linhas foram ignoradas; "avisos" = linhas que entraram com algo a conferir.
   // Vêm do navegador só para registro e para a mensagem final.
   const contagens = (origem) => {

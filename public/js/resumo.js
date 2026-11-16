@@ -27,7 +27,7 @@ async function carregar() {
       <div class="card ${classe}">
         <div class="rotulo">Custo sobre o faturamento</div>
         <div class="valor">${pct(r.percentual)}</div>
-        <div class="detalhe">Meta: até ${pct(r.meta)} do faturamento das lojas atendidas</div>
+        <div class="detalhe">Meta: até ${pct(r.meta)}. Compara ${reais(r.custoComLojas)} de custo com o faturamento das lojas atendidas${r.custoSemLojas ? `; não inclui ${reais(r.custoSemLojas)} de promotores sem loja lançada` : ''}.</div>
       </div>
       <div class="card">
         <div class="rotulo">Promotores dentro e fora da meta</div>

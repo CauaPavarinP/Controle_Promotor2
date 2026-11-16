@@ -199,6 +199,9 @@ async function salvarPromotor(id, dados) {
   return criado.id;
 }
 
+// Número inteiro positivo que cabe na coluna de id do banco. Qualquer outra coisa vira 0 (que não existe).
+const idValido = (valor) => (Number.isInteger(valor) && valor > 0 && valor <= 2147483647 ? valor : 0);
+
 // Lançamento manual de um atendimento (promotor + loja + mês). Se já existir, substitui.
 async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   if (!mesValido(mes)) throw new ErroDeValidacao('Informe o mês.');
@@ -206,8 +209,8 @@ async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   if (!Number.isInteger(qtd) || qtd < 0 || qtd > 999) throw new ErroDeValidacao('Quantidade de visitas inválida.');
   const valor = custo === '' || custo === null || custo === undefined ? null : dinheiro(custo, 'custo');
   const [[promotor], [loja]] = await Promise.all([
-    consulta('SELECT id FROM promotores WHERE id = $1', [Number(promotorId) || 0]),
-    consulta('SELECT id FROM lojas WHERE id = $1', [Number(lojaId) || 0]),
+    consulta('SELECT id FROM promotores WHERE id = $1', [idValido(promotorId)]),
+    consulta('SELECT id FROM lojas WHERE id = $1', [idValido(lojaId)]),
   ]);
   if (!promotor) throw new ErroDeValidacao('Promotor não encontrado.');
   if (!loja) throw new ErroDeValidacao('Escolha uma loja da lista.');
