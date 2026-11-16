@@ -7,7 +7,7 @@ const { consulta } = require('./db');
 const auth = require('./auth');
 const relatorios = require('./relatorios');
 const planilha = require('./planilha');
-const { importarFaturamento, importarVisitas, ErroDeImportacao } = require('./importar');
+const { gravarFaturamento, gravarVisitas, ErroDeImportacao } = require('./importar');
 
 const ROTULO_SITUACAO = {
   dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
@@ -37,7 +37,9 @@ function criarApp() {
     secure: config.producao,
     maxAge: 12 * 60 * 60 * 1000, // 12 horas
   }));
-  app.use(express.json({ limit: '200kb' }));
+  // Limite pequeno para as chamadas comuns; a gravação da importação tem o seu próprio limite, maior.
+  const jsonPequeno = express.json({ limit: '200kb' });
+  app.use((req, res, next) => (req.path === '/api/importar/gravar' ? next() : jsonPequeno(req, res, next)));
 
   app.get('/', (req, res) => res.redirect('/resumo'));
   app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
@@ -142,27 +144,23 @@ function criarApp() {
   });
 
   // ---------- Importar planilhas ----------
-  // A tela envia o arquivo duas vezes: primeiro para "analisar" (mostra as colunas para conferir)
-  // e depois para "confirmar" (grava de verdade), já com as colunas conferidas.
-  const receberArquivo = express.raw({ type: 'application/octet-stream', limit: '15mb' });
-  const lerEnvio = async (req) => {
-    if (!['faturamento', 'visitas'].includes(req.query.tipo)) throw new ErroDeImportacao('Tipo de importação inválido.');
+  // Quem lê o arquivo é o NAVEGADOR (o relatório do Focco pode passar de 150 MB): ele soma as linhas
+  // por loja e mês e envia para "gravar" só o resultado, que é pequeno.
+  // A única exceção é o .xlsx, que o navegador não sabe abrir: ele manda para "converter" e recebe as linhas.
+  const receberXlsx = express.raw({ type: 'application/octet-stream', limit: '25mb' });
+  api.post('/importar/converter', receberXlsx, async (req, res) => {
     if (!Buffer.isBuffer(req.body) || !req.body.length) throw new ErroDeImportacao('Nenhum arquivo foi enviado.');
-    return planilha.lerArquivo(req.body, String(req.query.arquivo || ''));
-  };
-
-  api.post('/importar/analisar', receberArquivo, async (req, res) => {
-    const abas = await lerEnvio(req);
-    res.json(planilha.analisar(abas, req.query.tipo, req.query.aba));
+    try {
+      res.json({ abas: await planilha.lerXlsx(req.body) });
+    } catch (erro) {
+      throw new ErroDeImportacao(erro.message);
+    }
   });
 
-  api.post('/importar/confirmar', receberArquivo, async (req, res) => {
-    const abas = await lerEnvio(req);
-    let opcoes;
-    try { opcoes = JSON.parse(String(req.query.opcoes || '{}')); } catch { throw new ErroDeImportacao('Opções inválidas.'); }
-    opcoes.arquivo = String(req.query.arquivo || '').slice(0, 200);
-    const importar = req.query.tipo === 'faturamento' ? importarFaturamento : importarVisitas;
-    res.json(await importar(abas, opcoes, req.usuario.nome));
+  api.post('/importar/gravar', express.json({ limit: '50mb' }), async (req, res) => {
+    const gravar = { faturamento: gravarFaturamento, visitas: gravarVisitas }[req.body.tipo];
+    if (!gravar) throw new ErroDeImportacao('Tipo de importação inválido.');
+    res.json(await gravar(req.body, req.usuario.nome));
   });
 
   api.get('/importacoes', async (req, res) => {
@@ -187,7 +185,8 @@ function criarApp() {
   // Erros "esperados" (validação) voltam com a mensagem para a tela. O resto vira erro genérico e vai para o log.
   app.use((erro, req, res, next) => { // eslint-disable-line no-unused-vars
     if (erro instanceof auth.ErroDeValidacao || erro instanceof ErroDeImportacao) return res.status(400).json({ erro: erro.message });
-    if (erro.type === 'entity.too.large') return res.status(413).json({ erro: 'Arquivo grande demais (máximo 15 MB).' });
+    if (erro.type === 'entity.too.large' && req.path === '/api/importar/gravar') return res.status(413).json({ erro: 'Importação grande demais para uma vez só. Divida o arquivo por período.' });
+    if (erro.type === 'entity.too.large') return res.status(413).json({ erro: 'Arquivo .xlsx grande demais (máximo 25 MB). Salve como .csv e importe de novo: .csv e o .xls do Focco não têm limite.' });
     if (erro.type === 'entity.parse.failed') return res.status(400).json({ erro: 'Dados inválidos.' });
     console.error(erro);
     res.status(500).json({ erro: 'Erro interno. Tente de novo; se continuar, avise o suporte.' });

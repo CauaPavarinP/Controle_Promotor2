@@ -11,7 +11,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   const { consulta, iniciarBanco, fecharBanco } = require('../src/db');
   const auth = require('../src/auth');
   const { criarApp } = require('../src/app');
-  const { montarPlanilha } = require('../src/planilha');
+  const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
 
   await consulta('DROP TABLE IF EXISTS visitas, faturamento, importacoes, promotores, lojas, usuarios CASCADE');
   await iniciarBanco();
@@ -34,10 +34,14 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       return { status: r.status, dados: await r.json().catch(() => null) };
     };
   };
-  const enviar = (chamar, acao, tipo, arquivo, opcoes) => chamar(
-    `/api/importar/${acao}?tipo=${tipo}&arquivo=dados.xlsx&opcoes=${encodeURIComponent(JSON.stringify(opcoes || {}))}`,
-    { method: 'POST', body: arquivo, headers: { 'content-type': 'application/octet-stream' } },
-  );
+  // Faz o mesmo caminho da tela Importar: converte o .xlsx, reconhece as colunas, soma as linhas e manda gravar.
+  const importar = async (chamar, tipo, arquivo, opcoes = {}) => {
+    const { abas } = (await chamar('/api/importar/converter', { method: 'POST', body: arquivo, headers: { 'content-type': 'application/octet-stream' } })).dados;
+    const analise = analisar(abas[0].linhas, tipo);
+    const agrupador = criarAgrupador(tipo, analise.mapa, opcoes);
+    abas[0].linhas.slice(analise.linhaCabecalho + 1).forEach(agrupador.adicionar);
+    return (await chamar('/api/importar/gravar', { method: 'POST', json: { tipo, arquivo: 'dados.xlsx', ...agrupador.resultado() } })).dados;
+  };
 
   const anonimo = sessao();
   assert.equal((await anonimo('/api/resumo?de=2026-10&ate=2026-10')).status, 401);
@@ -63,15 +67,13 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       { loja: 'Mercado Dois', cnpj: '22222222000122', vis: 4, vlr: 100 },
       { loja: '', cnpj: '', vis: 'TOTAL', vlr: 200 },
     ]);
-    const analise = (await enviar(regis, 'analisar', 'visitas', visitas)).dados;
-    assert.deepEqual(analise.mapa, { loja: 0, cnpj: 1, visitas: 2, custo: 3 });
-    const opcoes = { linhaCabecalho: analise.linhaCabecalho, mapa: analise.mapa, mes: '2026-10', promotorNovo: { nome: 'Agência Teste', tipo: 'AGENCIA' } };
-    const r1 = (await enviar(regis, 'confirmar', 'visitas', visitas, opcoes)).dados;
+    const opcoes = { mes: '2026-10', promotorNovo: { nome: 'Agência Teste', tipo: 'AGENCIA' } };
+    const r1 = await importar(regis, 'visitas', visitas, opcoes);
     assert.equal(r1.importadas, 2);
     assert.equal(r1.ignoradas, 1);
     assert.equal(r1.promotoresNovos, 1);
     // Importar o mesmo arquivo de novo não pode duplicar.
-    const r2 = (await enviar(regis, 'confirmar', 'visitas', visitas, opcoes)).dados;
+    const r2 = await importar(regis, 'visitas', visitas, opcoes);
     assert.equal(r2.promotoresNovos, 0);
     assert.equal(r2.lojasNovas, 0);
 
@@ -82,11 +84,10 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       { c: 'MERCADO UM LTDA', cnpj: '11.111.111/0001-11', d: '20/10/2026', v: 4000 },
       { c: 'MERCADO DOIS LTDA', cnpj: '22.222.222/0001-22', d: '10/10/2026', v: 1000 },
     ]);
-    const a2 = (await enviar(regis, 'analisar', 'faturamento', fat)).dados;
-    const r3 = (await enviar(regis, 'confirmar', 'faturamento', fat, { linhaCabecalho: a2.linhaCabecalho, mapa: a2.mapa })).dados;
+    const r3 = await importar(regis, 'faturamento', fat);
     assert.equal(r3.importadas, 2); // duas lojas (as duas notas do Mercado Um foram somadas)
     assert.equal(r3.lojasNovas, 0); // achou as lojas pelo CNPJ
-    await enviar(regis, 'confirmar', 'faturamento', fat, { linhaCabecalho: a2.linhaCabecalho, mapa: a2.mapa }); // repetir não soma em dobro
+    await importar(regis, 'faturamento', fat); // repetir não soma em dobro
 
     const resumo = (await regis('/api/resumo?de=2026-10&ate=2026-10')).dados;
     assert.equal(resumo.faturamentoTotal, 11000);
@@ -101,6 +102,19 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
 
     const fora = (await regis('/api/faturamento?de=2026-10&ate=2026-10&situacao=fora')).dados.lojas;
     assert.equal(fora.length, 1);
+  });
+
+  await t.test('o servidor confere os dados da importação e não grava nada pela metade', async () => {
+    const gravar = (itens) => regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'faturamento', arquivo: 'x', itens } });
+    const bom = { loja: { nome: 'Mercado Três', cnpj: '33333333000133' }, mes: '2026-10', empresa: '', valor: 500 };
+    assert.equal((await gravar([bom, { ...bom, valor: 'abc' }])).status, 400);
+    assert.equal((await gravar([bom, { ...bom, mes: '2026-13' }])).status, 400);
+    assert.equal((await gravar([bom, { ...bom, loja: { nome: '', cnpj: '' } }])).status, 400);
+    assert.equal((await gravar([])).status, 400);
+    assert.equal((await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'outro', itens: [bom] } })).status, 400);
+    // Como todas as tentativas falharam, o "Mercado Três" não pode ter sido cadastrado.
+    const [{ total }] = await consulta("SELECT count(*)::int AS total FROM lojas WHERE cnpj = '33333333000133'");
+    assert.equal(total, 0);
   });
 
   await t.test('o sistema não fica sem suporte', async () => {

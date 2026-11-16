@@ -1,76 +1,95 @@
-// Importação das planilhas: faturamento (exportado do FoccoERP) e visitas (planilhas das agências/promotores).
+// Gravação das importações: faturamento (FoccoERP) e visitas (agências, CLTs, MEIs).
+// O navegador já leu o arquivo e somou as linhas (ver public/js/planilha-comum.js). Aqui chegam só os
+// "itens" prontos. Mesmo assim conferimos tudo de novo: o servidor nunca confia no que vem do navegador.
 const { transacao } = require('./db');
-const { normalizar, textoDe, numeroDe, cnpjDe, mesDe, mesValido } = require('./planilha');
+const { normalizar, mesValido } = require('./planilha');
 
 class ErroDeImportacao extends Error {}
 
-// Prepara a leitura: escolhe a aba, pula o cabeçalho e cria a função que pega o valor de um campo na linha.
-function preparar(abas, opcoes, obrigatorios) {
-  const aba = abas.find((a) => a.nome === opcoes.aba) || abas[0];
-  const mapa = {};
-  for (const [campo, coluna] of Object.entries(opcoes.mapa || {})) {
-    if (coluna !== '' && coluna !== null && Number.isInteger(Number(coluna))) mapa[campo] = Number(coluna);
-  }
-  for (const grupo of obrigatorios) {
-    if (!grupo.campos.some((campo) => mapa[campo] !== undefined)) throw new ErroDeImportacao(grupo.mensagem);
-  }
-  const inicio = (Number(opcoes.linhaCabecalho) || 0) + 1;
-  const pegar = (linha, campo) => (mapa[campo] === undefined ? '' : linha[mapa[campo]] ?? '');
-  return { linhas: aba.linhas.slice(inicio), pegar };
-}
+const MAX_ITENS = 300000;
+const LOTE = 1000; // quantas linhas gravamos por comando SQL
 
-function contarMotivo(motivos, motivo) {
-  motivos[motivo] = (motivos[motivo] || 0) + 1;
-}
+const texto = (v, tamanho) => String(v ?? '').trim().slice(0, tamanho);
 
-// Lê os dados da loja de uma linha. Devolve null se a linha não tem loja (linha de total, linha em branco...).
-function lojaDaLinha(linha, pegar) {
-  const cnpj = cnpjDe(pegar(linha, 'cnpj'));
-  const nome = textoDe(pegar(linha, 'loja'));
-  if (!cnpj && (!nome || /^(sub)?total/i.test(nome))) return null;
+function conferirLoja(loja) {
+  const cnpj = String(loja?.cnpj ?? '');
+  if (cnpj && !/^\d{11,14}$/.test(cnpj)) throw new ErroDeImportacao('CNPJ inválido nos dados enviados.');
+  const nome = texto(loja?.nome, 200);
+  if (!cnpj && !nome) throw new ErroDeImportacao('Há um registro sem loja nos dados enviados.');
   return {
     chave: cnpj || `nome:${normalizar(nome)}`,
     cnpj,
     nome: nome || `CNPJ ${cnpj}`,
-    cidade: textoDe(pegar(linha, 'cidade')),
-    uf: textoDe(pegar(linha, 'uf')),
-    endereco: textoDe(pegar(linha, 'endereco')),
+    cidade: texto(loja.cidade, 100),
+    uf: texto(loja.uf, 40),
+    endereco: texto(loja.endereco, 200),
   };
 }
 
-// Procura a loja no banco (pelo CNPJ; sem CNPJ, pelo nome). Se não existir, cadastra.
-async function acharOuCriarLoja(rodar, loja, cache, contagem) {
-  if (cache.has(loja.chave)) return cache.get(loja.chave);
-  let id;
-  if (loja.cnpj) {
-    const [porCnpj] = await rodar('SELECT id FROM lojas WHERE cnpj = $1', [loja.cnpj]);
-    if (porCnpj) id = porCnpj.id;
-    else {
-      // Loja que já existia só com o nome (veio de uma planilha sem CNPJ): aproveita e grava o CNPJ.
-      const [porNome] = await rodar('SELECT id FROM lojas WHERE cnpj IS NULL AND lower(nome) = lower($1) ORDER BY id LIMIT 1', [loja.nome]);
-      if (porNome) {
-        id = porNome.id;
-        await rodar('UPDATE lojas SET cnpj = $1 WHERE id = $2', [loja.cnpj, id]);
-      }
-    }
-  } else {
-    const [porNome] = await rodar('SELECT id FROM lojas WHERE lower(nome) = lower($1) ORDER BY id LIMIT 1', [loja.nome]);
-    if (porNome) id = porNome.id;
-  }
-  if (!id) {
-    const [nova] = await rodar(
-      'INSERT INTO lojas (nome, cnpj, cidade, uf, endereco) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [loja.nome, loja.cnpj || null, loja.cidade, loja.uf, loja.endereco],
-    );
-    id = nova.id;
-    contagem.lojasNovas++;
-  }
-  cache.set(loja.chave, id);
-  return id;
+function conferirMes(mes) {
+  if (!mesValido(mes)) throw new ErroDeImportacao('Mês inválido nos dados enviados.');
+  return mes;
 }
 
-async function registrarImportacao(rodar, tipo, opcoes, usuario) {
-  const [imp] = await rodar('INSERT INTO importacoes (tipo, arquivo, usuario) VALUES ($1, $2, $3) RETURNING id', [tipo, opcoes.arquivo || '', usuario]);
+function conferirNumero(valor, { minimo, nome }) {
+  if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < minimo || Math.abs(valor) > 1e12) {
+    throw new ErroDeImportacao(`${nome} inválido nos dados enviados.`);
+  }
+  return Math.round(valor * 100) / 100;
+}
+
+function conferirEnvio(dados) {
+  if (!Array.isArray(dados?.itens) || !dados.itens.length) throw new ErroDeImportacao('Nenhuma linha válida no arquivo.');
+  if (dados.itens.length > MAX_ITENS) throw new ErroDeImportacao('Arquivo com registros demais para uma importação só. Divida por período.');
+  // "motivos" = por que linhas foram ignoradas. Vem do navegador só para registro.
+  const motivos = {};
+  for (const [motivo, quantidade] of Object.entries(dados.motivos || {}).slice(0, 20)) {
+    if (Number.isInteger(quantidade) && quantidade > 0) motivos[texto(motivo, 100)] = quantidade;
+  }
+  return motivos;
+}
+
+// Carrega todas as lojas de uma vez e devolve uma função que acha (ou cadastra) a loja de um item.
+// Procura pelo CNPJ; sem CNPJ, pelo nome.
+async function prepararLojas(rodar, contagem) {
+  const porCnpj = new Map();
+  const porNome = new Map();
+  const semCnpjPorNome = new Map();
+  for (const l of await rodar('SELECT id, nome, cnpj FROM lojas ORDER BY id')) {
+    const nome = l.nome.toLowerCase();
+    if (l.cnpj) porCnpj.set(l.cnpj, l.id);
+    else if (!semCnpjPorNome.has(nome)) semCnpjPorNome.set(nome, l.id);
+    if (!porNome.has(nome)) porNome.set(nome, l.id);
+  }
+  const resolvidas = new Map();
+
+  return async (loja) => {
+    if (resolvidas.has(loja.chave)) return resolvidas.get(loja.chave);
+    const nome = loja.nome.toLowerCase();
+    let id = loja.cnpj ? porCnpj.get(loja.cnpj) : porNome.get(nome);
+    if (!id && loja.cnpj && semCnpjPorNome.has(nome)) {
+      // Loja que já existia só com o nome (veio de uma planilha sem CNPJ): aproveita e grava o CNPJ.
+      id = semCnpjPorNome.get(nome);
+      semCnpjPorNome.delete(nome);
+      await rodar('UPDATE lojas SET cnpj = $1 WHERE id = $2', [loja.cnpj, id]);
+    }
+    if (!id) {
+      const [nova] = await rodar(
+        'INSERT INTO lojas (nome, cnpj, cidade, uf, endereco) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [loja.nome, loja.cnpj || null, loja.cidade, loja.uf, loja.endereco],
+      );
+      id = nova.id;
+      contagem.lojasNovas++;
+      if (!porNome.has(nome)) porNome.set(nome, id);
+    }
+    if (loja.cnpj) porCnpj.set(loja.cnpj, id);
+    resolvidas.set(loja.chave, id);
+    return id;
+  };
+}
+
+async function registrarImportacao(rodar, tipo, arquivo, usuario) {
+  const [imp] = await rodar('INSERT INTO importacoes (tipo, arquivo, usuario) VALUES ($1, $2, $3) RETURNING id', [tipo, texto(arquivo, 200), usuario]);
   return imp.id;
 }
 
@@ -79,158 +98,127 @@ async function fecharImportacao(rodar, id, resultado) {
     [resultado.importadas, resultado.ignoradas, resultado.total, resultado.meses.join(', '), id]);
 }
 
-// ---------- Faturamento ----------
-// Soma as linhas do arquivo por loja + mês + empresa e grava. Se já existia valor para a mesma
-// loja/mês/empresa, o valor novo SUBSTITUI o antigo (por isso exporte sempre o mês inteiro do Focco).
-async function importarFaturamento(abas, opcoes, usuario) {
-  const { linhas, pegar } = preparar(abas, opcoes, [
-    { campos: ['valor'], mensagem: 'Indique qual coluna tem o valor faturado.' },
-    { campos: ['cnpj', 'loja'], mensagem: 'Indique a coluna do CNPJ ou do nome da loja.' },
-  ]);
-  if (opcoes.mes && !mesValido(opcoes.mes)) throw new ErroDeImportacao('Mês inválido.');
-  const empresaPadrao = textoDe(opcoes.empresa);
+function montarResultado(registros, motivos, contagem, campoTotal) {
+  return {
+    importadas: registros.length,
+    ignoradas: Object.values(motivos).reduce((a, b) => a + b, 0),
+    motivos,
+    ...contagem,
+    total: Math.round(registros.reduce((soma, r) => soma + (r[campoTotal] || 0), 0) * 100) / 100,
+    meses: [...new Set(registros.map((r) => r.mes))].sort(),
+  };
+}
 
-  const somas = new Map();
-  const motivos = {};
-  for (const linha of linhas) {
-    const loja = lojaDaLinha(linha, pegar);
-    if (!loja) { contarMotivo(motivos, 'Sem loja (linha de total ou em branco)'); continue; }
-    const valor = numeroDe(pegar(linha, 'valor'));
-    if (valor === null) { contarMotivo(motivos, 'Valor não é número'); continue; }
-    const mes = mesDe(pegar(linha, 'data')) || opcoes.mes;
-    if (!mes) { contarMotivo(motivos, 'Sem data/mês (informe o mês na tela)'); continue; }
-    const empresa = textoDe(pegar(linha, 'empresa')) || empresaPadrao;
-    const chave = `${loja.chave}|${mes}|${empresa.toLowerCase()}`;
-    if (!somas.has(chave)) somas.set(chave, { loja, mes, empresa, valor: 0 });
-    somas.get(chave).valor += valor;
-  }
-  if (!somas.size) throw new ErroDeImportacao(`Nenhuma linha válida no arquivo. ${Object.keys(motivos).join('; ')}`);
+// ---------- Faturamento ----------
+// Um valor por loja + mês + empresa. Se já existia, o valor novo SUBSTITUI o antigo
+// (por isso exporte sempre o mês inteiro do Focco).
+async function gravarFaturamento(dados, usuario) {
+  const motivos = conferirEnvio(dados);
+  const itens = dados.itens.map((item) => ({
+    loja: conferirLoja(item.loja),
+    mes: conferirMes(item.mes),
+    empresa: texto(item.empresa, 60),
+    valor: conferirNumero(item.valor, { minimo: -1e12, nome: 'Valor' }),
+  }));
 
   return transacao(async (rodar) => {
     const contagem = { lojasNovas: 0 };
-    const cache = new Map();
-    const importacaoId = await registrarImportacao(rodar, 'faturamento', opcoes, usuario);
-    let total = 0;
-    for (const item of somas.values()) {
-      const lojaId = await acharOuCriarLoja(rodar, item.loja, cache, contagem);
-      await rodar(
-        `INSERT INTO faturamento (loja_id, mes, empresa, valor, importacao_id) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (loja_id, mes, empresa) DO UPDATE SET valor = EXCLUDED.valor, importacao_id = EXCLUDED.importacao_id`,
-        [lojaId, item.mes, item.empresa, Math.round(item.valor * 100) / 100, importacaoId],
-      );
-      total += item.valor;
+    const acharLoja = await prepararLojas(rodar, contagem);
+    const importacaoId = await registrarImportacao(rodar, 'faturamento', dados.arquivo, usuario);
+
+    // Soma de novo por loja (já com o id do banco) + mês + empresa, para nunca gravar a mesma chave duas vezes.
+    const somas = new Map();
+    for (const item of itens) {
+      const lojaId = await acharLoja(item.loja);
+      const chave = `${lojaId}|${item.mes}|${item.empresa}`;
+      if (!somas.has(chave)) somas.set(chave, { lojaId, mes: item.mes, empresa: item.empresa, valor: 0 });
+      somas.get(chave).valor += item.valor;
     }
-    const resultado = {
-      importadas: somas.size,
-      ignoradas: Object.values(motivos).reduce((a, b) => a + b, 0),
-      motivos,
-      lojasNovas: contagem.lojasNovas,
-      total: Math.round(total * 100) / 100,
-      meses: [...new Set([...somas.values()].map((i) => i.mes))].sort(),
-    };
+    const registros = [...somas.values()];
+    for (let i = 0; i < registros.length; i += LOTE) {
+      const lote = registros.slice(i, i + LOTE);
+      await rodar(
+        `INSERT INTO faturamento (loja_id, mes, empresa, valor, importacao_id)
+         SELECT loja_id, mes, empresa, valor, $5 FROM unnest($1::int[], $2::text[], $3::text[], $4::numeric[]) AS t(loja_id, mes, empresa, valor)
+         ON CONFLICT (loja_id, mes, empresa) DO UPDATE SET valor = EXCLUDED.valor, importacao_id = EXCLUDED.importacao_id`,
+        [lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.empresa), lote.map((r) => Math.round(r.valor * 100) / 100), importacaoId],
+      );
+    }
+    const resultado = montarResultado(registros, motivos, contagem, 'valor');
     await fecharImportacao(rodar, importacaoId, resultado);
     return resultado;
   });
 }
 
 // ---------- Visitas ----------
-
-function tipoDe(texto, padrao) {
-  const t = normalizar(texto);
-  if (t.includes('clt')) return 'CLT';
-  if (t.includes('mei')) return 'MEI';
-  if (t.includes('agenc')) return 'AGENCIA';
-  return padrao;
-}
-
-// Cada linha vira um atendimento (promotor + loja + mês) com visitas e custo.
-// O promotor vem da coluna "Promotor" do arquivo; se o arquivo não tiver essa coluna
-// (caso das agências), vale o promotor escolhido na tela.
-async function importarVisitas(abas, opcoes, usuario) {
-  const { linhas, pegar } = preparar(abas, opcoes, [
-    { campos: ['cnpj', 'loja'], mensagem: 'Indique a coluna do CNPJ ou do nome da loja.' },
-  ]);
-  if (opcoes.mes && !mesValido(opcoes.mes)) throw new ErroDeImportacao('Mês inválido.');
-  const novo = opcoes.promotorNovo || {};
-  const tipoPadrao = ['CLT', 'MEI', 'AGENCIA'].includes(novo.tipo) ? novo.tipo : 'AGENCIA';
-
-  const somas = new Map();
-  const motivos = {};
-  for (const linha of linhas) {
-    const loja = lojaDaLinha(linha, pegar);
-    if (!loja) { contarMotivo(motivos, 'Sem loja (linha de total ou em branco)'); continue; }
-    const mes = mesDe(pegar(linha, 'data')) || opcoes.mes;
-    if (!mes) { contarMotivo(motivos, 'Sem mês (informe o mês na tela)'); continue; }
-    const nomePromotor = textoDe(pegar(linha, 'promotor'));
-    if (!nomePromotor && !opcoes.promotorId && !textoDe(novo.nome)) {
-      contarMotivo(motivos, 'Sem promotor (escolha o promotor na tela)'); continue;
-    }
-    const promotor = nomePromotor
-      ? { chave: `nome:${nomePromotor.toLowerCase()}`, nome: nomePromotor, tipo: tipoDe(pegar(linha, 'tipo'), tipoPadrao), agencia: textoDe(pegar(linha, 'agencia')) || textoDe(novo.agencia) }
-      : opcoes.promotorId
-        ? { chave: `id:${opcoes.promotorId}`, id: Number(opcoes.promotorId) }
-        : { chave: `nome:${textoDe(novo.nome).toLowerCase()}`, nome: textoDe(novo.nome), tipo: tipoPadrao, agencia: textoDe(novo.agencia) };
-    const visitas = Math.max(0, Math.round(numeroDe(pegar(linha, 'visitas')) || 0));
-    const custo = numeroDe(pegar(linha, 'custo'));
-    const chave = `${promotor.chave}|${loja.chave}|${mes}`;
-    if (!somas.has(chave)) somas.set(chave, { promotor, loja, mes, visitas: 0, custo: null });
-    const item = somas.get(chave);
-    item.visitas += visitas;
-    if (custo !== null) item.custo = (item.custo || 0) + custo;
-  }
-  if (!somas.size) throw new ErroDeImportacao(`Nenhuma linha válida no arquivo. ${Object.keys(motivos).join('; ')}`);
+// Um registro por promotor + loja + mês. Se já existia, o novo SUBSTITUI o antigo.
+async function gravarVisitas(dados, usuario) {
+  const motivos = conferirEnvio(dados);
+  const itens = dados.itens.map((item) => {
+    const p = item.promotor || {};
+    const promotor = Number.isInteger(p.id) && p.id > 0
+      ? { id: p.id }
+      : { nome: texto(p.nome, 120), tipo: ['CLT', 'MEI', 'AGENCIA'].includes(p.tipo) ? p.tipo : 'AGENCIA', agencia: texto(p.agencia, 120) };
+    if (!promotor.id && !promotor.nome) throw new ErroDeImportacao('Há um registro sem promotor nos dados enviados.');
+    if (!Number.isInteger(item.visitas) || item.visitas < 0 || item.visitas > 9999) throw new ErroDeImportacao('Quantidade de visitas inválida nos dados enviados.');
+    return {
+      promotor,
+      loja: conferirLoja(item.loja),
+      mes: conferirMes(item.mes),
+      visitas: item.visitas,
+      custo: item.custo === null || item.custo === undefined ? null : conferirNumero(item.custo, { minimo: 0, nome: 'Custo' }),
+    };
+  });
 
   return transacao(async (rodar) => {
     const contagem = { lojasNovas: 0, promotoresNovos: 0 };
-    const cacheLojas = new Map();
-    const cachePromotores = new Map();
-    const importacaoId = await registrarImportacao(rodar, 'visitas', opcoes, usuario);
+    const acharLoja = await prepararLojas(rodar, contagem);
+    const importacaoId = await registrarImportacao(rodar, 'visitas', dados.arquivo, usuario);
 
-    const acharOuCriarPromotor = async (p) => {
-      if (cachePromotores.has(p.chave)) return cachePromotores.get(p.chave);
-      let id;
-      if (p.id) {
-        const [existe] = await rodar('SELECT id FROM promotores WHERE id = $1', [p.id]);
-        if (!existe) throw new ErroDeImportacao('O promotor escolhido não existe mais.');
-        id = existe.id;
-      } else {
-        const [existe] = await rodar('SELECT id FROM promotores WHERE lower(nome) = lower($1)', [p.nome]);
-        if (existe) id = existe.id;
-        else {
-          const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia) VALUES ($1, $2, $3) RETURNING id', [p.nome, p.tipo, p.agencia]);
-          id = criado.id;
-          contagem.promotoresNovos++;
-        }
+    const promotores = new Map();
+    const acharPromotor = async (p) => {
+      const chave = p.id ? `id:${p.id}` : `nome:${p.nome.toLowerCase()}`;
+      if (promotores.has(chave)) return promotores.get(chave);
+      const [existe] = p.id
+        ? await rodar('SELECT id FROM promotores WHERE id = $1', [p.id])
+        : await rodar('SELECT id FROM promotores WHERE lower(nome) = lower($1)', [p.nome]);
+      let id = existe && existe.id;
+      if (!id) {
+        if (p.id) throw new ErroDeImportacao('O promotor escolhido não existe mais.');
+        const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia) VALUES ($1, $2, $3) RETURNING id', [p.nome, p.tipo, p.agencia]);
+        id = criado.id;
+        contagem.promotoresNovos++;
       }
-      cachePromotores.set(p.chave, id);
+      promotores.set(chave, id);
       return id;
     };
 
-    let total = 0;
-    for (const item of somas.values()) {
-      const promotorId = await acharOuCriarPromotor(item.promotor);
-      const lojaId = await acharOuCriarLoja(rodar, item.loja, cacheLojas, contagem);
-      const custo = item.custo === null ? null : Math.round(item.custo * 100) / 100;
+    const somas = new Map();
+    for (const item of itens) {
+      const promotorId = await acharPromotor(item.promotor);
+      const lojaId = await acharLoja(item.loja);
+      const chave = `${promotorId}|${lojaId}|${item.mes}`;
+      if (!somas.has(chave)) somas.set(chave, { promotorId, lojaId, mes: item.mes, visitas: 0, custo: null });
+      const soma = somas.get(chave);
+      soma.visitas += item.visitas;
+      if (item.custo !== null) soma.custo = (soma.custo || 0) + item.custo;
+    }
+    const registros = [...somas.values()];
+    for (let i = 0; i < registros.length; i += LOTE) {
+      const lote = registros.slice(i, i + LOTE);
       await rodar(
-        `INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo, importacao_id) VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo, importacao_id)
+         SELECT promotor_id, loja_id, mes, qtd, custo, $6 FROM unnest($1::int[], $2::int[], $3::text[], $4::int[], $5::numeric[]) AS t(promotor_id, loja_id, mes, qtd, custo)
          ON CONFLICT (promotor_id, loja_id, mes) DO UPDATE
            SET qtd_visitas = EXCLUDED.qtd_visitas, custo = EXCLUDED.custo, importacao_id = EXCLUDED.importacao_id`,
-        [promotorId, lojaId, item.mes, item.visitas, custo, importacaoId],
+        [lote.map((r) => r.promotorId), lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.visitas),
+          lote.map((r) => (r.custo === null ? null : Math.round(r.custo * 100) / 100)), importacaoId],
       );
-      total += custo || 0;
     }
-    const resultado = {
-      importadas: somas.size,
-      ignoradas: Object.values(motivos).reduce((a, b) => a + b, 0),
-      motivos,
-      lojasNovas: contagem.lojasNovas,
-      promotoresNovos: contagem.promotoresNovos,
-      total: Math.round(total * 100) / 100,
-      meses: [...new Set([...somas.values()].map((i) => i.mes))].sort(),
-    };
+    const resultado = montarResultado(registros, motivos, contagem, 'custo');
     await fecharImportacao(rodar, importacaoId, resultado);
     return resultado;
   });
 }
 
-module.exports = { importarFaturamento, importarVisitas, ErroDeImportacao };
+module.exports = { gravarFaturamento, gravarVisitas, ErroDeImportacao };

@@ -31,7 +31,10 @@ Ficam todas em [`src/calculo.js`](src/calculo.js).
 
 ## Importação
 
-- Aceita o **.xls do FoccoERP** (que por dentro é uma tabela HTML), **.xlsx** e **.csv**. Só o .xls binário do Excel antigo precisa ser salvo como .xlsx antes.
+- Aceita o **.xls do FoccoERP** (que por dentro é uma tabela HTML), **.csv** e **.xlsx**.
+- **Arquivos grandes (150 MB ou mais) funcionam.** Quem lê o arquivo é o navegador, aos poucos: ele soma as linhas por loja e mês e envia ao servidor só o resultado. O arquivo inteiro nunca é enviado, então não há limite de tamanho para .xls do Focco e .csv.
+- A exceção é o **.xlsx**, que o navegador não sabe abrir: ele vai para o servidor converter, com limite de 25 MB. Se passar disso, salve como .csv.
+- O .xls binário do Excel antigo não é aceito (salve como .xlsx ou .csv).
 - No relatório de faturamento do Focco, as colunas usadas são `CNPJ CPF`, `CLIENTE`, `DT EMIS`, `VLR TOTAL`, `COD EMP`, `CIDADE` e `UF`. Cada linha é um item de nota; o sistema soma tudo por cliente e mês.
 - O sistema reconhece as colunas pelo nome do cabeçalho e mostra para conferir. Dá para corrigir na tela.
 - As lojas são reconhecidas pelo **CNPJ** (sem CNPJ, pelo nome). É o CNPJ que liga a planilha da agência ao faturamento do Focco.
@@ -57,8 +60,9 @@ Ficam todas em [`src/calculo.js`](src/calculo.js).
 | `src/auth.js` | Login, perfis e usuários |
 | `src/calculo.js` | As contas (custo, %, situação). Não acessa o banco |
 | `src/relatorios.js` | Busca os dados do período e aplica os filtros das telas |
-| `src/planilha.js` | Lê .xlsx/.csv e reconhece as colunas |
-| `src/importar.js` | Grava faturamento e visitas |
+| `public/js/planilha-comum.js` | Lê o arquivo aos poucos, reconhece as colunas e soma as linhas. Roda no navegador **e** no servidor |
+| `src/planilha.js` | Converte .xlsx em linhas e monta os arquivos de exportação |
+| `src/importar.js` | Confere os dados recebidos e grava faturamento e visitas |
 | `src/app.js` | Rotas da API |
 | `public/` | Telas (um `.html` e um `.js` por tela; `comum.js` é compartilhado) |
 

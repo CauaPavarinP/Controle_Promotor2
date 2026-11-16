@@ -11,7 +11,7 @@
     <nav class="menu" id="menu" aria-label="Menu principal"></nav>
     <main class="conteudo">
       <div class="topo">
-        <div><h1>Importar planilhas</h1><p class="subtitulo">Aceita o .xls exportado pelo FoccoERP, .xlsx e .csv. Antes de gravar, você confere as colunas.</p></div>
+        <div><h1>Importar planilhas</h1><p class="subtitulo">Aceita o .xls exportado pelo FoccoERP (de qualquer tamanho), .xlsx e .csv. Antes de gravar, você confere as colunas.</p></div>
         <a class="botao secundario" href="/api/modelo/visitas">Baixar modelo de visitas</a>
       </div>
       <div class="painel">
@@ -23,6 +23,7 @@
           <div class="campo largo"><label for="arquivo">Arquivo</label><input id="arquivo" type="file" accept=".xlsx,.xls,.csv,.txt,.html,.htm"></div>
         </div>
         <p class="ajuda" id="ajuda-tipo"></p>
+        <p class="ajuda" id="progresso" role="status" hidden></p>
       </div>
       <div id="aviso" class="aviso" hidden></div>
       <div class="painel" id="conferencia" hidden>
@@ -60,6 +61,7 @@
     </main>
   </div>
   <script src="/js/comum.js"></script>
+  <script src="/js/planilha-comum.js"></script>
   <script src="/js/importar.js"></script>
 </body>
 </html>
