@@ -10,12 +10,14 @@ const filtros = () => ({
   ativo: document.getElementById('ativo').value,
 });
 
+let paginas = null; // controla qual página da tabela está na tela
+
 async function carregar() {
   const aviso = document.getElementById('aviso');
   mostrarAviso(aviso, opcoesDaTela ? faltaNoPeriodo(opcoesDaTela) : '', '');
   try {
     const { promotores } = await api(`/api/promotores?${parametros(filtros())}`);
-    document.getElementById('linhas').innerHTML = promotores.map((p) => `
+    paginas.mostrar(promotores.map((p) => `
       <tr class="clicavel" data-id="${p.id}">
         <td><a href="/promotor?id=${p.id}">${esc(p.nome)}</a>${p.ativo ? '' : ' <span class="etiqueta">Inativo</span>'}</td>
         <td>${esc(TIPOS[p.tipo])}${(p.agencia || p.empresa) && p.agencia !== p.nome ? `<span class="menor">${esc(p.agencia || p.empresa)}</span>` : ''}</td>
@@ -25,7 +27,7 @@ async function carregar() {
         <td class="num">${reais(p.faturamento)}</td>
         <td class="num">${pct(p.percentual)}</td>
         <td>${etiqueta(p.situacao)}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhum promotor encontrado.</td></tr>';
+      </tr>`), '<tr><td colspan="8" class="vazio">Nenhum promotor encontrado.</td></tr>', 'promotores');
   } catch (erro) {
     mostrarAviso(aviso, erro.message);
   }
@@ -40,6 +42,7 @@ async function carregar() {
   const situacao = new URLSearchParams(location.search).get('situacao');
   if (situacao) document.getElementById('situacao').value = situacao;
 
+  paginas = criarPaginacao('linhas', 'paginacao');
   montarPeriodo(opcoes, carregar);
   document.getElementById('busca').addEventListener('input', comAtraso(carregar));
   for (const id of ['tipo', 'agencia', 'situacao', 'ativo']) document.getElementById(id).addEventListener('change', carregar);

@@ -97,6 +97,9 @@ tfoot td { font-weight: 700; border-top: 2px solid var(--borda); border-bottom: 
 td .menor { display: block; font-size: 12.5px; color: var(--texto-fraco); }
 .vazio { text-align: center; color: var(--texto-fraco); padding: 28px 10px; }
 
+.paginacao { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding-top: 14px; color: var(--texto-fraco); font-size: 14px; }
+.paginacao .botoes-pagina { display: flex; align-items: center; gap: 10px; }
+
 .etiqueta { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; background: var(--cinza-fundo); color: var(--texto-fraco); }
 .etiqueta.dentro { background: var(--verde-fundo); color: var(--verde); }
 .etiqueta.fora { background: var(--vermelho-fundo); color: var(--vermelho); }

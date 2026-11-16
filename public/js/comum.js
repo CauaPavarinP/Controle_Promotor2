@@ -166,3 +166,49 @@ function faltaNoPeriodo(opcoes) {
   if (!faltas.length) return '';
   return `${faltas.join(' ')} Para comparar custo com faturamento, escolha um período que tenha os dois ou importe o que falta.`;
 }
+
+// Paginação: em vez de esticar a tela com centenas de linhas, mostra 10 por vez com "Anterior" e "Próxima".
+// Uso:  const paginas = criarPaginacao('linhas', 'paginacao');
+//       paginas.mostrar(listaDeLinhasEmHtml, '<tr>...mensagem de lista vazia...</tr>', 'lojas');
+// Os totais do rodapé da tabela continuam somando TODAS as linhas, não só as da página.
+function criarPaginacao(idCorpo, idNavegacao, porPagina = 10) {
+  const corpo = document.getElementById(idCorpo);
+  const navegacao = document.getElementById(idNavegacao);
+  let linhas = [];
+  let pagina = 1;
+  let nomeDosItens = 'linhas';
+
+  function desenhar() {
+    const totalPaginas = Math.max(1, Math.ceil(linhas.length / porPagina));
+    pagina = Math.min(Math.max(1, pagina), totalPaginas);
+    const inicio = (pagina - 1) * porPagina;
+    corpo.innerHTML = linhas.slice(inicio, inicio + porPagina).join('');
+    navegacao.hidden = linhas.length <= porPagina;
+    navegacao.innerHTML = `
+      <span>Mostrando ${inicio + 1} a ${Math.min(inicio + porPagina, linhas.length)} de ${linhas.length} ${esc(nomeDosItens)}</span>
+      <span class="botoes-pagina">
+        <button type="button" class="secundario pequeno" data-ir="${pagina - 1}"${pagina === 1 ? ' disabled' : ''}>← Anterior</button>
+        <span>Página ${pagina} de ${totalPaginas}</span>
+        <button type="button" class="secundario pequeno" data-ir="${pagina + 1}"${pagina === totalPaginas ? ' disabled' : ''}>Próxima →</button>
+      </span>`;
+  }
+
+  navegacao.addEventListener('click', (evento) => {
+    const botao = evento.target.closest('button[data-ir]');
+    if (!botao) return;
+    pagina = Number(botao.dataset.ir);
+    desenhar();
+    corpo.closest('.painel').scrollIntoView({ block: 'nearest' }); // volta para o começo da tabela
+  });
+
+  return {
+    // manterPagina = true: continua na página em que estava (ex.: depois de excluir uma linha).
+    mostrar(novasLinhas, htmlVazio, nome, manterPagina = false) {
+      linhas = novasLinhas;
+      nomeDosItens = nome;
+      if (!manterPagina) pagina = 1;
+      if (!linhas.length) { corpo.innerHTML = htmlVazio; navegacao.hidden = true; return; }
+      desenhar();
+    },
+  };
+}

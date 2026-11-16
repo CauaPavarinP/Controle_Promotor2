@@ -3,7 +3,10 @@ const idPromotor = Number(new URLSearchParams(location.search).get('id'));
 let detalhe = null;
 let lojasCadastradas = [];
 
-async function carregar() {
+let paginas = null; // controla qual página da tabela de lojas está na tela
+
+// manterPagina = true quando só recarregamos os mesmos dados (ex.: depois de excluir uma loja).
+async function carregar(manterPagina = false) {
   const aviso = document.getElementById('aviso');
   mostrarAviso(aviso, '');
   try {
@@ -35,7 +38,7 @@ async function carregar() {
         ? 'Neste período, o custo veio da planilha de atendimentos (valor informado por loja).'
         : 'Sem valor por loja na planilha, o custo fixo mensal acima é dividido entre as lojas (pelas visitas; sem visitas informadas, em partes iguais).';
 
-    document.getElementById('linhas').innerHTML = detalhe.lojas.map((l, i) => `
+    paginas.mostrar(detalhe.lojas.map((l, i) => `
       <tr>
         <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}${l.loja.cidade ? ` · ${esc(l.loja.cidade)}` : ''}</span></td>
         <td>${esc(l.dias || '—')}</td>
@@ -45,7 +48,7 @@ async function carregar() {
         <td class="num">${pct(l.percentual)}</td>
         <td>${etiqueta(l.situacao)}</td>
         <td class="num"><button type="button" class="perigo pequeno" data-excluir="${i}" aria-label="Excluir visitas de ${esc(l.loja.nome)}">Excluir</button></td>
-      </tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhuma loja lançada neste período.</td></tr>';
+      </tr>`), '<tr><td colspan="8" class="vazio">Nenhuma loja lançada neste período.</td></tr>', 'lojas', manterPagina);
     document.getElementById('totais').innerHTML = detalhe.lojas.length ? `
       <tr><td>Total</td><td></td><td class="num">${detalhe.visitas || '—'}</td><td class="num">${reais(detalhe.custo)}</td>
       <td class="num">${reais(detalhe.faturamento)}</td><td class="num">${pct(detalhe.percentual)}</td><td></td><td></td></tr>` : '';
@@ -58,10 +61,11 @@ async function carregar() {
   await iniciarPagina();
   const opcoes = await api('/api/opcoes');
   lojasCadastradas = opcoes.lojas;
-  montarPeriodo(opcoes, carregar);
+  paginas = criarPaginacao('linhas', 'paginacao');
+  montarPeriodo(opcoes, () => carregar());
   await carregar();
 
-  document.getElementById('editar').addEventListener('click', () => detalhe && abrirFormPromotor(detalhe.promotor, carregar));
+  document.getElementById('editar').addEventListener('click', () => detalhe && abrirFormPromotor(detalhe.promotor, () => carregar(true)));
 
   // Excluir as visitas de uma loja (no período escolhido).
   document.getElementById('linhas').addEventListener('click', async (evento) => {
@@ -74,7 +78,7 @@ async function carregar() {
     } catch (erro) {
       mostrarAviso(document.getElementById('aviso'), erro.message);
     }
-    carregar();
+    carregar(true);
   });
 
   // Lançar visita manualmente.
@@ -100,7 +104,7 @@ async function carregar() {
         visitas: Number(document.getElementById('v-visitas').value), custo: document.getElementById('v-custo').value,
       } });
       janela.close();
-      carregar();
+      carregar(true);
     } catch (erro) {
       mostrarAviso(document.getElementById('aviso-visita'), erro.message);
     }

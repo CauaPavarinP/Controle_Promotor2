@@ -8,12 +8,14 @@ const filtros = () => ({
   situacao: document.getElementById('situacao').value,
 });
 
+let paginas = null; // controla qual página da tabela está na tela
+
 async function carregar() {
   const aviso = document.getElementById('aviso');
   mostrarAviso(aviso, opcoesDaTela ? faltaNoPeriodo(opcoesDaTela) : '', '');
   try {
     const { lojas, totais } = await api(`/api/faturamento?${parametros(filtros())}`);
-    document.getElementById('linhas').innerHTML = lojas.map((l) => `
+    paginas.mostrar(lojas.map((l) => `
       <tr>
         <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}</span></td>
         <td>${esc([l.loja.cidade, l.loja.uf].filter(Boolean).join(' · '))}</td>
@@ -22,7 +24,7 @@ async function carregar() {
         <td class="num">${reais(l.custo)}</td>
         <td class="num">${l.qtdPromotores ? pct(l.percentual) : '—'}</td>
         <td>${etiqueta(l.situacao)}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="vazio">Nenhuma loja encontrada neste período.</td></tr>';
+      </tr>`), '<tr><td colspan="7" class="vazio">Nenhuma loja encontrada neste período.</td></tr>', 'lojas');
     const pctTotal = totais.faturamento > 0 ? (totais.custo / totais.faturamento) * 100 : null;
     document.getElementById('totais').innerHTML = lojas.length ? `
       <tr><td>Total (${lojas.length} lojas)</td><td></td><td class="num">${reais(totais.faturamento)}</td><td class="num">${totais.visitas}</td>
@@ -37,6 +39,7 @@ async function carregar() {
   const opcoes = await api('/api/opcoes');
   opcoesDaTela = opcoes;
   document.getElementById('empresa').insertAdjacentHTML('beforeend', opcoes.empresas.map((e) => `<option>${esc(e)}</option>`).join(''));
+  paginas = criarPaginacao('linhas', 'paginacao');
   montarPeriodo(opcoes, carregar);
   document.getElementById('busca').addEventListener('input', comAtraso(carregar));
   document.getElementById('empresa').addEventListener('change', carregar);
