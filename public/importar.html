@@ -11,7 +11,7 @@
     <nav class="menu" id="menu" aria-label="Menu principal"></nav>
     <main class="conteudo">
       <div class="topo">
-        <div><h1>Importar planilhas</h1><p class="subtitulo">Aceita arquivos .xlsx e .csv. Antes de gravar, você confere as colunas.</p></div>
+        <div><h1>Importar planilhas</h1><p class="subtitulo">Aceita o .xls exportado pelo FoccoERP, .xlsx e .csv. Antes de gravar, você confere as colunas.</p></div>
         <a class="botao secundario" href="/api/modelo/visitas">Baixar modelo de visitas</a>
       </div>
       <div class="painel">
@@ -20,7 +20,7 @@
           <div class="campo"><label for="tipo">Tipo de planilha</label>
             <select id="tipo"><option value="faturamento">Faturamento (FoccoERP)</option><option value="visitas">Visitas dos promotores</option></select>
           </div>
-          <div class="campo largo"><label for="arquivo">Arquivo</label><input id="arquivo" type="file" accept=".xlsx,.csv,.txt"></div>
+          <div class="campo largo"><label for="arquivo">Arquivo</label><input id="arquivo" type="file" accept=".xlsx,.xls,.csv,.txt,.html,.htm"></div>
         </div>
         <p class="ajuda" id="ajuda-tipo"></p>
       </div>

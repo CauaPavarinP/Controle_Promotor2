@@ -53,3 +53,20 @@ test('lê CSV com ponto e vírgula e planilha .xlsx', async () => {
   assert.deepEqual(abas[0].linhas, [['Loja', 'Valor'], ['A', 10]]);
   await assert.rejects(lerArquivo(Buffer.from('x'), 'antigo.xls'), /\.xls/);
 });
+
+test('lê o .xls do FoccoERP (tabela HTML) e reconhece as colunas', async () => {
+  const titulos = ['COD EMP', 'DT EMIS', 'ANO', 'MES', 'NUM NF', 'CNPJ CPF', 'CLIENTE', 'CIDADE', 'UF', 'VLR MERCADORIA', 'VLR TOTAL', 'G TOTAL GERAL'];
+  const html = `<HTML><HEAD><TITLE>Gerador de Relat\u00f3rios Focco3i</TITLE></HEAD><BODY><h1>Relatorio</h1><table border="1"><TR>
+${titulos.map((t) => `<td ALIGN="RIGHT"><font face="Arial"><b>${t}</b></font></td>`).join('\n')}
+</TR><TR><td>63</td><td>05/10/2026</td><td>2026</td><td>10</td><td>123</td><td class="excel-text">08944502000263</td><td>MERCADO S&amp;A&nbsp;LTDA</td><td>S\u00e3o Carlos</td><td>SP</td><td>900,00</td><td>1.000,50</td><td></td></TR>
+</TABLE></BODY></HTML>`;
+  const abas = await lerArquivo(Buffer.from(html, 'latin1'), '63.xls'); // o Focco grava no padrão antigo do Windows
+  assert.equal(abas[0].linhas.length, 2);
+  assert.equal(abas[0].linhas[1][6], 'MERCADO S&A LTDA');
+  assert.equal(abas[0].linhas[1][7], 'São Carlos');
+  const a = analisar(abas, 'faturamento');
+  assert.equal(a.linhaCabecalho, 0);
+  assert.deepEqual(a.mapa, { cnpj: 5, loja: 6, valor: 10, data: 1, empresa: 0, cidade: 7, uf: 8 });
+  assert.equal(mesDe(abas[0].linhas[1][a.mapa.data]), '2026-10');
+  assert.equal(numeroDe(abas[0].linhas[1][a.mapa.valor]), 1000.5);
+});

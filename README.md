@@ -31,7 +31,8 @@ Ficam todas em [`src/calculo.js`](src/calculo.js).
 
 ## Importação
 
-- Aceita **.xlsx** e **.csv**. Arquivo **.xls** (Excel antigo) precisa ser salvo como .xlsx antes.
+- Aceita o **.xls do FoccoERP** (que por dentro é uma tabela HTML), **.xlsx** e **.csv**. Só o .xls binário do Excel antigo precisa ser salvo como .xlsx antes.
+- No relatório de faturamento do Focco, as colunas usadas são `CNPJ CPF`, `CLIENTE`, `DT EMIS`, `VLR TOTAL`, `COD EMP`, `CIDADE` e `UF`. Cada linha é um item de nota; o sistema soma tudo por cliente e mês.
 - O sistema reconhece as colunas pelo nome do cabeçalho e mostra para conferir. Dá para corrigir na tela.
 - As lojas são reconhecidas pelo **CNPJ** (sem CNPJ, pelo nome). É o CNPJ que liga a planilha da agência ao faturamento do Focco.
 - **Importar de novo substitui**, não soma: faturamento por loja + mês + empresa; visitas por promotor + loja + mês. Por isso, exporte do Focco sempre o **mês inteiro**.

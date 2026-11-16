@@ -3,7 +3,7 @@ const el = (id) => document.getElementById(id);
 let analise = null; // resposta do servidor sobre o arquivo escolhido
 
 const AJUDA = {
-  faturamento: 'Exporte do FoccoERP o faturamento por cliente, de preferência o mês inteiro. Precisa ter o CNPJ (ou o nome) da loja e o valor.',
+  faturamento: 'Use o arquivo .xls do Gerador de Relatórios do FoccoERP, de preferência com o mês inteiro. O sistema soma as notas de cada cliente (CNPJ) por mês.',
   visitas: 'Planilha da agência ou do promotor: loja, CNPJ, quantidade de visitas no mês e custo. Se o arquivo não tiver o nome do promotor, você escolhe abaixo.',
 };
 const SUBSTITUI = {

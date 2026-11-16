@@ -16,8 +16,8 @@ const CAMPOS = {
     { campo: 'cnpj', rotulo: 'CNPJ da loja', nomes: ['cnpj', 'cpf cnpj', 'cnpj cpf', 'cgc'] },
     { campo: 'loja', rotulo: 'Nome da loja / cliente', nomes: ['razao social', 'cliente', 'nome cliente', 'nome fantasia', 'fantasia', 'loja', 'estabelecimento', 'nome'] },
     { campo: 'valor', rotulo: 'Valor faturado', nomes: ['valor faturado', 'faturamento', 'valor total', 'vlr total', 'total', 'valor liquido', 'valor', 'vlr'] },
-    { campo: 'data', rotulo: 'Data ou mês', nomes: ['data emissao', 'dt emissao', 'emissao', 'data', 'mes', 'competencia', 'periodo'] },
-    { campo: 'empresa', rotulo: 'Empresa', nomes: ['empresa', 'filial'] },
+    { campo: 'data', rotulo: 'Data ou mês', nomes: ['data emissao', 'dt emissao', 'dt emis', 'emissao', 'data', 'mes', 'competencia', 'periodo'] },
+    { campo: 'empresa', rotulo: 'Empresa', nomes: ['empresa', 'cod emp', 'filial'] },
     { campo: 'cidade', rotulo: 'Cidade', nomes: ['cidade', 'municipio'] },
     { campo: 'uf', rotulo: 'UF', nomes: ['uf', 'estado'] },
   ],
@@ -69,16 +69,50 @@ function lerCsv(texto) {
   });
 }
 
+// O FoccoERP exporta um arquivo ".xls" que, por dentro, é uma página HTML com uma tabela.
+// Aqui pegamos cada linha (<tr>) e cada célula (<td>) dessa tabela, tirando as marcações.
+const ENTIDADES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+function textoDoHtml(html) {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (tudo, codigo) => {
+      if (codigo[0] !== '#') return ENTIDADES[codigo.toLowerCase()] ?? tudo;
+      const numero = codigo[1].toLowerCase() === 'x' ? parseInt(codigo.slice(2), 16) : Number(codigo.slice(1));
+      return Number.isFinite(numero) && numero <= 0x10ffff ? String.fromCodePoint(numero) : tudo;
+    })
+    .replace(/\s+/g, ' ').trim();
+}
+
+function lerHtml(texto) {
+  const linhas = [];
+  for (const [, linha] of texto.matchAll(/<tr\b[^>]*>([\s\S]*?)(?=<tr\b|<\/tr>|<\/table>)/gi)) {
+    const celulas = [...linha.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)(?=<t[dh]\b|<\/t[dh]>|$)/gi)].map((c) => textoDoHtml(c[1]));
+    if (celulas.some((c) => c !== '')) linhas.push(celulas);
+  }
+  return linhas;
+}
+
+// Converte os bytes em texto. Arquivos antigos do Windows (como os do Focco) não usam UTF-8.
+function decodificar(buffer) {
+  const texto = buffer.toString('utf8');
+  return texto.includes('\uFFFD') ? buffer.toString('latin1') : texto;
+}
+
 // Lê o arquivo e devolve as abas: [{ nome, linhas: [[celula, celula...], ...] }]
 async function lerArquivo(buffer, nomeArquivo = '') {
   const nome = nomeArquivo.toLowerCase();
+  // Olhamos o começo do conteúdo, e não só a extensão, porque o ".xls" do Focco na verdade é HTML.
+  const comeco = buffer.subarray(0, 2000).toString('latin1').toLowerCase();
+  if (/<html|<table|<!doctype/.test(comeco)) {
+    const linhas = lerHtml(decodificar(buffer));
+    if (!linhas.length) throw new Error('Não encontrei nenhuma tabela dentro do arquivo.');
+    return [{ nome: 'Relatório', linhas }];
+  }
   if (nome.endsWith('.csv') || nome.endsWith('.txt')) {
-    let texto = buffer.toString('utf8');
-    if (texto.includes('�')) texto = buffer.toString('latin1'); // arquivo salvo no padrão antigo do Windows
-    return [{ nome: 'CSV', linhas: lerCsv(texto) }];
+    return [{ nome: 'CSV', linhas: lerCsv(decodificar(buffer)) }];
   }
   if (nome.endsWith('.xls')) {
-    throw new Error('Arquivo .xls (Excel antigo) não é aceito. Abra no Excel e use "Salvar como" → .xlsx.');
+    throw new Error('Este .xls é do Excel antigo (binário) e não é aceito. Abra no Excel e use "Salvar como" → .xlsx.');
   }
   const pasta = new ExcelJS.Workbook();
   try {
