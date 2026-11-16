@@ -27,18 +27,43 @@
       { campo: 'cidade', rotulo: 'Cidade', nomes: ['cidade', 'municipio'] },
       { campo: 'uf', rotulo: 'UF', nomes: ['uf', 'estado'] },
     ],
+    // Aba "Atendimentos" do modelo padrão (uma linha por loja atendida no mês).
     visitas: [
-      { campo: 'cnpj', rotulo: 'CNPJ da loja', nomes: ['cnpj', 'cpf cnpj', 'cgc'] },
+      { campo: 'cnpj', rotulo: 'CNPJ da loja', nomes: ['cnpj da loja', 'cnpj', 'cpf cnpj', 'cgc'] },
       { campo: 'loja', rotulo: 'Nome da loja / mercado', nomes: ['loja', 'estabelecimento', 'mercado', 'pdv', 'ponto de venda', 'razao social', 'nome fantasia', 'cliente'] },
-      { campo: 'visitas', rotulo: 'Quantidade de visitas no mês', nomes: ['visitas', 'qtd visitas', 'vis mes', 'visitas mes', 'qtde visitas', 'qtd', 'vis'] },
-      { campo: 'custo', rotulo: 'Custo no mês (R$)', nomes: ['custo', 'vlr mes', 'valor mes', 'custo mes', 'valor total', 'valor', 'vlr'] },
+      { campo: 'visitas', rotulo: 'Quantidade de visitas no mês', nomes: ['visitas no mes', 'visitas', 'qtd visitas', 'vis mes', 'visitas mes', 'qtde visitas', 'qtd', 'vis'] },
+      { campo: 'custo', rotulo: 'Valor / custo no mês (R$)', nomes: ['valor do mes r', 'valor do mes', 'custo', 'vlr mes', 'valor mes', 'custo mes', 'valor total', 'valor', 'vlr'] },
       { campo: 'promotor', rotulo: 'Promotor', nomes: ['promotor', 'promotora', 'nome promotor', 'colaborador'] },
-      { campo: 'tipo', rotulo: 'Tipo (CLT, MEI ou Agência)', nomes: ['tipo', 'vinculo', 'contrato'] },
-      { campo: 'agencia', rotulo: 'Agência', nomes: ['agencia'] },
-      { campo: 'data', rotulo: 'Mês', nomes: ['mes', 'competencia', 'periodo', 'data'] },
+      { campo: 'codigo', rotulo: 'Código do promotor', nomes: ['codigo do promotor', 'codigo promotor', 'matricula', 'codigo'] },
+      { campo: 'tipo', rotulo: 'Tipo (Agência, CLT, MEI, Freelancer)', nomes: ['tipo', 'vinculo', 'contrato'] },
+      { campo: 'agencia', rotulo: 'Agência ou MEI', nomes: ['agencia ou mei', 'agencia'] },
+      { campo: 'data', rotulo: 'Mês de referência', nomes: ['mes de referencia', 'mes', 'competencia', 'periodo', 'data'] },
+      { campo: 'dias', rotulo: 'Dias de visita', nomes: ['dias de visita', 'dias', 'frequencia'] },
+      { campo: 'status', rotulo: 'Status', nomes: ['status', 'situacao'] },
+      { campo: 'supervisor', rotulo: 'Supervisor', nomes: ['supervisor', 'supervisora'] },
+      { campo: 'observacao', rotulo: 'Observação', nomes: ['observacao', 'obs'] },
       { campo: 'cidade', rotulo: 'Cidade', nomes: ['cidade', 'municipio'] },
       { campo: 'uf', rotulo: 'UF', nomes: ['uf', 'estado'] },
       { campo: 'endereco', rotulo: 'Endereço', nomes: ['endereco', 'logradouro'] },
+    ],
+    // Cadastro de promotores com os custos mensais (aba "Promotores CLT" do modelo padrão).
+    promotores: [
+      { campo: 'nome', rotulo: 'Nome do promotor', nomes: ['nome', 'promotor', 'colaborador', 'funcionario'] },
+      { campo: 'codigo', rotulo: 'Código / matrícula', nomes: ['codigo', 'matricula', 'codigo do promotor'] },
+      { campo: 'empresa', rotulo: 'Empresa / grupo', nomes: ['empresa grupo', 'empresa', 'grupo'] },
+      { campo: 'admissao', rotulo: 'Admissão', nomes: ['admissao', 'data admissao', 'data de admissao'] },
+      { campo: 'salario', rotulo: 'Salário', nomes: ['salario r', 'salario'] },
+      { campo: 'periculosidade', rotulo: 'Periculosidade', nomes: ['periculosidade 30', 'periculosidade'] },
+      { campo: 'ajuda_celular', rotulo: 'Ajuda celular', nomes: ['ajuda celular fixo', 'ajuda celular', 'celular'] },
+      { campo: 'ajuda_custo', rotulo: 'Ajuda de custo / alimentação', nomes: ['ajuda de custo alimentacao almoco', 'ajuda de custo', 'alimentacao'] },
+      { campo: 'almoco', rotulo: 'Almoço (se vier separado)', nomes: ['almoco', 'refeicao'] },
+      { campo: 'vale_transporte', rotulo: 'Vale-transporte', nomes: ['vale transporte', 'vt'] },
+      { campo: 'gratificacao', rotulo: 'Gratificação', nomes: ['gratificacao'] },
+      { campo: 'outros_custos', rotulo: 'Outros custos', nomes: ['outros custos', 'outros'] },
+      { campo: 'regiao', rotulo: 'Região', nomes: ['regiao', 'cidade'] },
+      { campo: 'tipo', rotulo: 'Tipo (CLT, MEI...)', nomes: ['tipo', 'vinculo'] },
+      { campo: 'agencia', rotulo: 'Agência', nomes: ['agencia ou mei', 'agencia'] },
+      { campo: 'telefone', rotulo: 'Telefone', nomes: ['telefone', 'celular whatsapp', 'whatsapp'] },
     ],
   };
 
@@ -75,6 +100,7 @@
     const colunas = (linhas[linhaCabecalho] || []).map(textoDe);
     return {
       linhaCabecalho,
+      acertos, // quantas colunas foram reconhecidas (serve para escolher a aba certa da planilha)
       colunas,
       mapa: sugerirMapa(colunas, tipo),
       campos: CAMPOS[tipo].map(({ campo, rotulo }) => ({ campo, rotulo })),
@@ -103,6 +129,31 @@
     let digitos = typeof v === 'number' ? String(Math.round(v)) : String(v ?? '').replace(/\D/g, '');
     if (digitos.length >= 12 && digitos.length < 14) digitos = digitos.padStart(14, '0');
     return digitos.length >= 11 && digitos.length <= 14 ? digitos : '';
+  }
+
+  // Confere os dois dígitos verificadores do CNPJ (pega número digitado errado).
+  function cnpjValido(cnpj) {
+    if (!/^\d{14}$/.test(cnpj) || /^(\d)\1{13}$/.test(cnpj)) return false;
+    const digito = (tamanho) => {
+      let soma = 0;
+      let peso = tamanho - 7;
+      for (let i = 0; i < tamanho; i++) {
+        soma += Number(cnpj[i]) * peso;
+        peso = peso === 2 ? 9 : peso - 1;
+      }
+      const resto = soma % 11;
+      return resto < 2 ? 0 : 11 - resto;
+    };
+    return digito(12) === Number(cnpj[12]) && digito(13) === Number(cnpj[13]);
+  }
+
+  // "27/01/2025" ou "2025-01-27" -> "2025-01-27". Qualquer outra coisa -> ''.
+  function dataDe(v) {
+    const texto = String(v ?? '').trim();
+    let m;
+    if ((m = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/))) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    if ((m = texto.match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[0];
+    return '';
   }
 
   const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -219,41 +270,61 @@
 
   // ---------- Agrupamento: linhas do arquivo -> itens para gravar ----------
 
+  const TIPOS_VALIDOS = ['CLT', 'MEI', 'AGENCIA', 'FREELANCER'];
   function tipoDe(texto, padrao) {
     const t = normalizar(texto);
     if (t.includes('clt')) return 'CLT';
     if (t.includes('mei')) return 'MEI';
+    if (t.includes('free')) return 'FREELANCER';
     if (t.includes('agenc')) return 'AGENCIA';
     return padrao;
   }
 
-  // Recebe as linhas de dados uma a uma e vai somando.
+  const primeiroNome = (nome) => normalizar(nome).split(' ')[0] || '';
+  const CAMPOS_DINHEIRO = ['salario', 'periculosidade', 'ajuda_celular', 'ajuda_custo', 'almoco', 'vale_transporte', 'gratificacao', 'outros_custos'];
+
+  // Recebe as linhas de dados uma a uma e monta os "itens" que o servidor vai gravar:
   //  - faturamento: um item por loja + mês + empresa, com a soma do valor;
-  //  - visitas: um item por promotor + loja + mês, com a soma das visitas e do custo.
+  //  - visitas:     um item por promotor + loja + mês, com a soma das visitas e do custo;
+  //  - promotores:  um item por promotor, com os custos mensais do cadastro.
   // "mapa" diz em qual coluna está cada campo. "opcoes" traz o que não está no arquivo (mês, empresa, promotor).
+  // O resultado traz também "motivos" (linhas ignoradas) e "avisos" (linhas importadas, mas com algo a conferir).
   function criarAgrupador(tipo, mapa, opcoes = {}) {
     const tem = (campo) => Number.isInteger(mapa[campo]);
-    if (!tem('cnpj') && !tem('loja')) throw new Error('Indique a coluna do CNPJ ou do nome da loja.');
+    if (tipo === 'promotores') {
+      if (!tem('nome')) throw new Error('Indique a coluna com o nome do promotor.');
+    } else if (!tem('cnpj') && !tem('loja')) throw new Error('Indique a coluna do CNPJ ou do nome da loja.');
     if (tipo === 'faturamento' && !tem('valor')) throw new Error('Indique qual coluna tem o valor faturado.');
     if (opcoes.mes && !mesValido(opcoes.mes)) throw new Error('Mês inválido.');
 
     const pegar = (linha, campo) => (tem(campo) ? linha[mapa[campo]] ?? '' : '');
     const somas = new Map();
     const motivos = {}; // por que linhas foram ignoradas, e quantas
+    const avisos = {}; // linhas que entraram, mas têm algo para conferir
     const ignorar = (motivo) => { motivos[motivo] = (motivos[motivo] || 0) + 1; };
+    const avisar = (aviso) => { avisos[aviso] = (avisos[aviso] || 0) + 1; };
     const novo = opcoes.promotorNovo || {};
-    const tipoPadrao = ['CLT', 'MEI', 'AGENCIA'].includes(novo.tipo) ? novo.tipo : 'AGENCIA';
+    const tipoPadrao = TIPOS_VALIDOS.includes(novo.tipo) ? novo.tipo : (tipo === 'promotores' ? 'CLT' : 'AGENCIA');
     const empresaPadrao = textoDe(opcoes.empresa);
 
     function lojaDaLinha(linha) {
-      const cnpj = cnpjDe(pegar(linha, 'cnpj'));
+      const bruto = pegar(linha, 'cnpj');
+      let cnpj = cnpjDe(bruto);
       const nome = textoDe(pegar(linha, 'loja'));
+      const cidade = textoDe(pegar(linha, 'cidade'));
+      if (tipo === 'visitas') {
+        // Sem CNPJ certo não dá para ligar a loja ao faturamento do Focco. A linha entra, mas fica o aviso.
+        const temAlgo = /\d/.test(String(bruto));
+        if (temAlgo && !cnpjValido(cnpj)) { cnpj = ''; if (nome) avisar('Loja com CNPJ errado (entrou sem CNPJ)'); }
+        else if (!temAlgo && nome && !/^(sub)?total/i.test(nome)) avisar('Loja sem CNPJ');
+      }
       if (!cnpj && (!nome || /^(sub)?total/i.test(nome))) return null;
       return {
-        chave: cnpj || `nome:${normalizar(nome)}`,
+        // Sem CNPJ, a loja é identificada pelo nome + cidade (há redes com o mesmo nome em cidades diferentes).
+        chave: cnpj || `nome:${normalizar(nome)}|${normalizar(cidade)}`,
         cnpj,
         nome: nome || `CNPJ ${cnpj}`,
-        cidade: textoDe(pegar(linha, 'cidade')),
+        cidade,
         uf: textoDe(pegar(linha, 'uf')),
         endereco: textoDe(pegar(linha, 'endereco')),
       };
@@ -272,40 +343,96 @@
       somas.get(chave).valor += valor;
     }
 
+    // Quem atendeu a loja. Ordem: nome na linha; se não tiver, a agência da linha (o "promotor" é a própria
+    // agência); se o arquivo não disser nada, o promotor escolhido na tela.
+    function promotorDaLinha(linha) {
+      const nome = textoDe(pegar(linha, 'promotor'));
+      const agencia = textoDe(pegar(linha, 'agencia'));
+      const codigo = textoDe(pegar(linha, 'codigo'));
+      const tipoPromotor = tipoDe(pegar(linha, 'tipo'), tipoPadrao);
+      if (nome || agencia) {
+        return { nome: nome || agencia, tipo: tipoPromotor, agencia: agencia || textoDe(novo.agencia), codigo: nome ? codigo : '' };
+      }
+      if (opcoes.promotorId) return { id: Number(opcoes.promotorId) };
+      if (textoDe(novo.nome)) return { nome: textoDe(novo.nome), tipo: tipoPadrao, agencia: textoDe(novo.agencia), codigo: '' };
+      return null;
+    }
+
     function adicionarVisita(linha) {
       const loja = lojaDaLinha(linha);
       if (!loja) return ignorar('Sem loja (linha de total ou em branco)');
       const mes = mesDe(pegar(linha, 'data')) || opcoes.mes;
       if (!mes) return ignorar('Sem mês (informe o mês na tela)');
-      // O promotor vem da coluna "Promotor"; se o arquivo não tiver (caso das agências), vale o escolhido na tela.
-      const nomeNaLinha = textoDe(pegar(linha, 'promotor'));
-      let promotor;
-      if (nomeNaLinha) {
-        promotor = { nome: nomeNaLinha, tipo: tipoDe(pegar(linha, 'tipo'), tipoPadrao), agencia: textoDe(pegar(linha, 'agencia')) || textoDe(novo.agencia) };
-      } else if (opcoes.promotorId) promotor = { id: Number(opcoes.promotorId) };
-      else if (textoDe(novo.nome)) promotor = { nome: textoDe(novo.nome), tipo: tipoPadrao, agencia: textoDe(novo.agencia) };
-      else return ignorar('Sem promotor (escolha o promotor na tela)');
-      const chavePromotor = promotor.id ? `id:${promotor.id}` : `nome:${promotor.nome.toLowerCase()}`;
+      const promotor = promotorDaLinha(linha);
+      if (!promotor) return ignorar('Sem promotor (escolha o promotor na tela)');
+      const chavePromotor = promotor.id ? `id:${promotor.id}`
+        : promotor.codigo ? `cod:${promotor.codigo}|${primeiroNome(promotor.nome)}`
+          : `nome:${promotor.nome.toLowerCase()}|${promotor.agencia.toLowerCase()}`;
       const visitas = Math.max(0, Math.round(numeroDe(pegar(linha, 'visitas')) || 0));
       const custo = numeroDe(pegar(linha, 'custo'));
+      if (custo === null && tem('custo')) avisar('Linha sem valor (usa o custo fixo do cadastro do promotor, se houver)');
       const chave = `${chavePromotor}|${loja.chave}|${mes}`;
-      if (!somas.has(chave)) somas.set(chave, { promotor, loja, mes, visitas: 0, custo: null });
+      if (!somas.has(chave)) {
+        somas.set(chave, { promotor, loja, mes, visitas: 0, custo: null, dias: '', status: '', supervisor: '', observacao: '' });
+      } else avisar('Loja repetida para o mesmo promotor no mês (os valores foram somados)');
       const item = somas.get(chave);
       item.visitas += visitas;
       if (custo !== null) item.custo = (item.custo || 0) + custo;
+      for (const campo of ['dias', 'status', 'supervisor', 'observacao']) item[campo] = item[campo] || textoDe(pegar(linha, campo));
+    }
+
+    // Valor em dinheiro do cadastro. Algumas células vêm com texto no lugar do número ("carro", "600 + 120m"):
+    // usamos o primeiro número que aparecer (ou zero) e guardamos o texto original para a pessoa conferir.
+    function dinheiroDe(bruto) {
+      const direto = numeroDe(bruto);
+      if (direto !== null) return { valor: Math.max(0, direto), texto: '' };
+      const texto = textoDe(bruto);
+      if (!texto) return { valor: 0, texto: '' };
+      const achado = texto.match(/\d[\d.]*(?:,\d+)?/);
+      return { valor: achado ? numeroDe(achado[0]) || 0 : 0, texto };
+    }
+
+    function adicionarPromotor(linha) {
+      const nome = textoDe(pegar(linha, 'nome'));
+      if (!nome) return ignorar('Linha sem nome');
+      if (normalizar(nome) === 'nome') return ignorar('Linha de cabeçalho repetida'); // o cadastro repete o título a cada grupo
+      const item = {
+        nome,
+        codigo: textoDe(pegar(linha, 'codigo')),
+        tipo: tipoDe(pegar(linha, 'tipo'), tipoPadrao),
+        agencia: textoDe(pegar(linha, 'agencia')),
+        empresa: textoDe(pegar(linha, 'empresa')),
+        regiao: textoDe(pegar(linha, 'regiao')),
+        telefone: textoDe(pegar(linha, 'telefone')),
+        admissao: dataDe(pegar(linha, 'admissao')),
+      };
+      const textos = [];
+      for (const campo of CAMPOS_DINHEIRO) {
+        const { valor, texto } = dinheiroDe(pegar(linha, campo));
+        item[campo] = Math.round(valor * 100) / 100;
+        if (texto) textos.push(`${campo.replace('_', ' ')}: "${texto}"`);
+      }
+      // O que veio escrito no lugar de número fica na observação, para nada se perder.
+      item.observacao = textos.length ? `Conferir (veio texto na planilha) — ${textos.join('; ')}` : '';
+      if (textos.length) avisar('Promotor com texto no lugar de valor (veja a observação no cadastro)');
+      const chave = `${item.codigo}|${normalizar(nome)}|${normalizar(item.empresa)}`;
+      if (somas.has(chave)) avisar('Promotor repetido no arquivo (ficou a última linha)');
+      somas.set(chave, item);
     }
 
     return {
-      adicionar: tipo === 'faturamento' ? adicionarFaturamento : adicionarVisita,
+      adicionar: { faturamento: adicionarFaturamento, visitas: adicionarVisita, promotores: adicionarPromotor }[tipo],
       resultado() {
         const arredondar = (v) => (v === null ? null : Math.round(v * 100) / 100);
-        const itens = [...somas.values()].map((item) => (tipo === 'faturamento'
-          ? { ...item, valor: arredondar(item.valor) }
-          : { ...item, custo: arredondar(item.custo) }));
-        return { itens, motivos };
+        const itens = [...somas.values()].map((item) => {
+          if (tipo === 'faturamento') return { ...item, valor: arredondar(item.valor) };
+          if (tipo === 'visitas') return { ...item, custo: arredondar(item.custo) };
+          return item;
+        });
+        return { itens, motivos, avisos };
       },
     };
   }
 
-  return { CAMPOS, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
+  return { CAMPOS, TIPOS_VALIDOS, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
 });

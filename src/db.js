@@ -111,8 +111,33 @@ CREATE TABLE IF NOT EXISTS visitas (
 );
 `;
 
+// Mudanças feitas depois da primeira versão. Cada comando só age se ainda não foi aplicado,
+// então pode rodar toda vez que o sistema inicia sem estragar nada.
+const ATUALIZACOES = `
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS codigo        TEXT NOT NULL DEFAULT '';
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS empresa       TEXT NOT NULL DEFAULT '';
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS regiao        TEXT NOT NULL DEFAULT '';
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS admissao      TEXT NOT NULL DEFAULT '';  -- AAAA-MM-DD
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS ajuda_celular NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS gratificacao  NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+-- Tipo novo: Freelancer.
+ALTER TABLE promotores DROP CONSTRAINT IF EXISTS promotores_tipo_check;
+ALTER TABLE promotores ADD CONSTRAINT promotores_tipo_check CHECK (tipo IN ('CLT', 'MEI', 'AGENCIA', 'FREELANCER'));
+
+-- Duas agências podem ter um promotor com o mesmo nome ("João"). O que não pode repetir é nome + agência + código.
+DROP INDEX IF EXISTS promotores_nome_unico;
+CREATE UNIQUE INDEX IF NOT EXISTS promotores_identidade ON promotores (lower(nome), lower(agencia), codigo);
+
+ALTER TABLE visitas ADD COLUMN IF NOT EXISTS dias_visita TEXT NOT NULL DEFAULT '';  -- ex.: "Ter, Sex (2x/semana)"
+ALTER TABLE visitas ADD COLUMN IF NOT EXISTS status      TEXT NOT NULL DEFAULT '';
+ALTER TABLE visitas ADD COLUMN IF NOT EXISTS supervisor  TEXT NOT NULL DEFAULT '';
+ALTER TABLE visitas ADD COLUMN IF NOT EXISTS observacao  TEXT NOT NULL DEFAULT '';
+`;
+
 async function iniciarBanco() {
   await consulta(TABELAS);
+  await consulta(ATUALIZACOES);
 }
 
 async function fecharBanco() {

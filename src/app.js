@@ -7,12 +7,12 @@ const { consulta } = require('./db');
 const auth = require('./auth');
 const relatorios = require('./relatorios');
 const planilha = require('./planilha');
-const { gravarFaturamento, gravarVisitas, ErroDeImportacao } = require('./importar');
+const { gravarFaturamento, gravarVisitas, gravarPromotores, ErroDeImportacao } = require('./importar');
 
 const ROTULO_SITUACAO = {
-  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
+  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
 };
-const ROTULO_TIPO = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência' };
+const ROTULO_TIPO = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência', FREELANCER: 'Freelancer' };
 
 function criarApp() {
   const app = express();
@@ -119,7 +119,8 @@ function criarApp() {
     const { promotores } = await relatorios.listaDePromotores(req.query);
     await enviarPlanilha(res, `promotores-${req.query.de}-a-${req.query.ate}`, [
       { titulo: 'Promotor', chave: 'nome', largura: 40 }, { titulo: 'Tipo', chave: 'tipo', largura: 12 },
-      { titulo: 'Agência', chave: 'agencia', largura: 25 }, { titulo: 'Lojas', chave: 'qtdLojas', largura: 10 },
+      { titulo: 'Agência', chave: 'agencia', largura: 25 }, { titulo: 'Empresa', chave: 'empresa', largura: 25 }, { titulo: 'Código', chave: 'codigo', largura: 10 },
+      { titulo: 'Lojas', chave: 'qtdLojas', largura: 10 },
       { titulo: 'Visitas', chave: 'visitas', largura: 10 }, { titulo: 'Custo', chave: 'custo', formato: REAIS },
       { titulo: 'Faturamento das lojas', chave: 'faturamento', formato: REAIS, largura: 24 },
       { titulo: '% custo', chave: 'percentual', formato: '0.00' }, { titulo: 'Situação', chave: 'situacao' },
@@ -129,17 +130,33 @@ function criarApp() {
     })));
   });
 
-  // Planilha modelo: o formato padrão para pedir às agências.
+  // Planilhas modelo: o formato padrão para pedir às agências (mesmas colunas do "Modelo de atendimento" da 101).
   api.get('/modelo/visitas', async (req, res) => {
-    await enviarPlanilha(res, 'modelo-visitas', [
-      { titulo: 'Promotor', chave: 'promotor', largura: 30 }, { titulo: 'Tipo', chave: 'tipo', largura: 12 },
-      { titulo: 'Agência', chave: 'agencia', largura: 25 }, { titulo: 'Loja', chave: 'loja', largura: 45 },
-      { titulo: 'CNPJ', chave: 'cnpj', largura: 20 }, { titulo: 'Cidade', chave: 'cidade' }, { titulo: 'UF', chave: 'uf', largura: 8 },
-      { titulo: 'Mês', chave: 'mes', largura: 12 }, { titulo: 'Visitas', chave: 'visitas', largura: 10 },
-      { titulo: 'Custo', chave: 'custo', formato: REAIS },
+    await enviarPlanilha(res, 'modelo-atendimentos', [
+      { titulo: 'Mês de referência', chave: 'mes', largura: 18 }, { titulo: 'Agência ou MEI', chave: 'agencia', largura: 28 },
+      { titulo: 'Tipo', chave: 'tipo', largura: 12 }, { titulo: 'CNPJ da loja', chave: 'cnpj', largura: 22 },
+      { titulo: 'Loja', chave: 'loja', largura: 40 }, { titulo: 'Cidade', chave: 'cidade' }, { titulo: 'UF', chave: 'uf', largura: 6 },
+      { titulo: 'Promotor', chave: 'promotor', largura: 24 }, { titulo: 'Código do promotor', chave: 'codigo', largura: 20 },
+      { titulo: 'Dias de visita', chave: 'dias', largura: 22 }, { titulo: 'Visitas no mês', chave: 'visitas', largura: 16 },
+      { titulo: 'Valor do mês (R$)', chave: 'valor', formato: REAIS }, { titulo: 'Status', chave: 'status', largura: 12 },
+      { titulo: 'Observação', chave: 'observacao', largura: 30 }, { titulo: 'Supervisor', chave: 'supervisor', largura: 20 },
     ], [{
-      promotor: 'Nome do promotor (exemplo, apague esta linha)', tipo: 'Agência', agencia: 'Nome da agência', loja: 'Supermercado Exemplo - Centro',
-      cnpj: '00.000.000/0001-00', cidade: 'Rio Claro', uf: 'SP', mes: '10/2026', visitas: 4, custo: 127.12,
+      mes: '10/2026', agencia: 'Nome da agência (exemplo, apague esta linha)', tipo: 'Agência', cnpj: '11.222.333/0001-81', loja: 'Supermercado Exemplo - Centro',
+      cidade: 'Rio Claro', uf: 'SP', promotor: 'Nome do promotor', codigo: '', dias: 'Ter, Sex (2x/semana)', visitas: 8, valor: 159.54, status: 'Ativa', observacao: '', supervisor: '',
+    }]);
+  });
+
+  api.get('/modelo/promotores', async (req, res) => {
+    await enviarPlanilha(res, 'modelo-cadastro-promotores', [
+      { titulo: 'Empresa / grupo', chave: 'empresa', largura: 26 }, { titulo: 'Admissão', chave: 'admissao', largura: 14 },
+      { titulo: 'Código', chave: 'codigo', largura: 12 }, { titulo: 'Nome', chave: 'nome', largura: 36 }, { titulo: 'Tipo', chave: 'tipo', largura: 12 },
+      { titulo: 'Salário (R$)', chave: 'salario', formato: REAIS }, { titulo: 'Periculosidade', chave: 'periculosidade', formato: REAIS },
+      { titulo: 'Ajuda celular', chave: 'celular', formato: REAIS }, { titulo: 'Ajuda de custo / alimentação', chave: 'ajuda', formato: REAIS, largura: 28 },
+      { titulo: 'Vale transporte', chave: 'vt', formato: REAIS }, { titulo: 'Gratificação', chave: 'gratificacao', formato: REAIS },
+      { titulo: 'Outros custos', chave: 'outros', formato: REAIS }, { titulo: 'Região', chave: 'regiao', largura: 20 },
+    ], [{
+      empresa: '101 Filial (exemplo, apague esta linha)', admissao: '01/02/2026', codigo: '123', nome: 'Nome completo do promotor', tipo: 'CLT',
+      salario: 2390, periculosidade: 717, celular: 50, ajuda: 600, vt: 400, gratificacao: 0, outros: 0, regiao: 'Curitiba',
     }]);
   });
 
@@ -158,7 +175,7 @@ function criarApp() {
   });
 
   api.post('/importar/gravar', express.json({ limit: '50mb' }), async (req, res) => {
-    const gravar = { faturamento: gravarFaturamento, visitas: gravarVisitas }[req.body.tipo];
+    const gravar = { faturamento: gravarFaturamento, visitas: gravarVisitas, promotores: gravarPromotores }[req.body.tipo];
     if (!gravar) throw new ErroDeImportacao('Tipo de importação inválido.');
     res.json(await gravar(req.body, req.usuario.nome));
   });

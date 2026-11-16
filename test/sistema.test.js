@@ -63,8 +63,8 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       { titulo: 'Estabelecimento', chave: 'loja' }, { titulo: 'Estab. CNPJ', chave: 'cnpj' },
       { titulo: 'Vis. Mes', chave: 'vis' }, { titulo: 'Vlr Mes', chave: 'vlr' },
     ], [
-      { loja: 'Mercado Um', cnpj: '11111111000111', vis: 4, vlr: 100 },
-      { loja: 'Mercado Dois', cnpj: '22222222000122', vis: 4, vlr: 100 },
+      { loja: 'Mercado Um', cnpj: '11222333000181', vis: 4, vlr: 100 },
+      { loja: 'Mercado Dois', cnpj: '22222333000106', vis: 4, vlr: 100 },
       { loja: '', cnpj: '', vis: 'TOTAL', vlr: 200 },
     ]);
     const opcoes = { mes: '2026-10', promotorNovo: { nome: 'Agência Teste', tipo: 'AGENCIA' } };
@@ -80,9 +80,9 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     const fat = await montarPlanilha('Fat', [
       { titulo: 'Cliente', chave: 'c' }, { titulo: 'CNPJ', chave: 'cnpj' }, { titulo: 'Emissão', chave: 'd' }, { titulo: 'Valor Total', chave: 'v' },
     ], [
-      { c: 'MERCADO UM LTDA', cnpj: '11.111.111/0001-11', d: '05/10/2026', v: 6000 },
-      { c: 'MERCADO UM LTDA', cnpj: '11.111.111/0001-11', d: '20/10/2026', v: 4000 },
-      { c: 'MERCADO DOIS LTDA', cnpj: '22.222.222/0001-22', d: '10/10/2026', v: 1000 },
+      { c: 'MERCADO UM LTDA', cnpj: '11.222.333/0001-81', d: '05/10/2026', v: 6000 },
+      { c: 'MERCADO UM LTDA', cnpj: '11.222.333/0001-81', d: '20/10/2026', v: 4000 },
+      { c: 'MERCADO DOIS LTDA', cnpj: '22.222.333/0001-06', d: '10/10/2026', v: 1000 },
     ]);
     const r3 = await importar(regis, 'faturamento', fat);
     assert.equal(r3.importadas, 2); // duas lojas (as duas notas do Mercado Um foram somadas)
@@ -97,8 +97,8 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
 
     const lista = (await regis('/api/promotores?de=2026-10&ate=2026-10')).dados.promotores;
     const detalhe = (await regis(`/api/promotores/${lista[0].id}?de=2026-10&ate=2026-10`)).dados;
-    assert.equal(detalhe.lojas.find((l) => l.loja.cnpj === '11111111000111').situacao, 'dentro'); // 1%
-    assert.equal(detalhe.lojas.find((l) => l.loja.cnpj === '22222222000122').situacao, 'fora'); // 10%
+    assert.equal(detalhe.lojas.find((l) => l.loja.cnpj === '11222333000181').situacao, 'dentro'); // 1%
+    assert.equal(detalhe.lojas.find((l) => l.loja.cnpj === '22222333000106').situacao, 'fora'); // 10%
 
     const fora = (await regis('/api/faturamento?de=2026-10&ate=2026-10&situacao=fora')).dados.lojas;
     assert.equal(fora.length, 1);
@@ -106,15 +106,53 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
 
   await t.test('o servidor confere os dados da importação e não grava nada pela metade', async () => {
     const gravar = (itens) => regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'faturamento', arquivo: 'x', itens } });
-    const bom = { loja: { nome: 'Mercado Três', cnpj: '33333333000133' }, mes: '2026-10', empresa: '', valor: 500 };
+    const bom = { loja: { nome: 'Mercado Três', cnpj: '33333444000106' }, mes: '2026-10', empresa: '', valor: 500 };
     assert.equal((await gravar([bom, { ...bom, valor: 'abc' }])).status, 400);
     assert.equal((await gravar([bom, { ...bom, mes: '2026-13' }])).status, 400);
     assert.equal((await gravar([bom, { ...bom, loja: { nome: '', cnpj: '' } }])).status, 400);
     assert.equal((await gravar([])).status, 400);
     assert.equal((await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'outro', itens: [bom] } })).status, 400);
     // Como todas as tentativas falharam, o "Mercado Três" não pode ter sido cadastrado.
-    const [{ total }] = await consulta("SELECT count(*)::int AS total FROM lojas WHERE cnpj = '33333333000133'");
+    const [{ total }] = await consulta("SELECT count(*)::int AS total FROM lojas WHERE cnpj = '33333444000106'");
     assert.equal(total, 0);
+  });
+
+  await t.test('modelo padrão: atendimentos de CLT + cadastro com salário se encontram pelo código', async () => {
+    const gravar = (tipo, itens) => regis('/api/importar/gravar', { method: 'POST', json: { tipo, arquivo: 'modelo.xlsx', itens } });
+    const loja = (nome) => ({ nome, cnpj: '', cidade: 'Curitiba', uf: 'PR' });
+    // 1º) Atendimentos: a planilha traz só o primeiro nome e o código, sem valor por loja.
+    const maria = { nome: 'MARIA', tipo: 'CLT', agencia: 'Filial PR (CLT)', codigo: '30' };
+    const r1 = (await gravar('visitas', [
+      { promotor: maria, loja: loja('Condor A'), mes: '2026-10', visitas: 0, custo: null, dias: 'Seg' },
+      { promotor: maria, loja: loja('Condor B'), mes: '2026-10', visitas: 0, custo: null, dias: 'Qua' },
+      // Outra pessoa com o mesmo código (de outra empresa) não pode ser confundida com a Maria.
+      { promotor: { nome: 'PEDRO', tipo: 'CLT', agencia: 'Outra filial', codigo: '30' }, loja: loja('Condor C'), mes: '2026-10', visitas: 0, custo: null },
+    ])).dados;
+    assert.equal(r1.promotoresNovos, 2);
+    // 2º) Cadastro: nome completo, mesmo código. Tem que atualizar a Maria que já existe, não criar outra.
+    const custos = { salario: 2000, periculosidade: 600, ajuda_celular: 50, ajuda_custo: 600, almoco: 0, vale_transporte: 400, gratificacao: 0, outros_custos: 0 };
+    const r2 = (await gravar('promotores', [
+      { nome: 'Maria Aparecida de Souza', codigo: '30', tipo: 'CLT', empresa: '101 FILIAL PARANÁ', admissao: '2026-02-01', regiao: 'Curitiba', ...custos },
+      { nome: 'Carlos Sem Loja', codigo: '77', tipo: 'CLT', empresa: 'GRUBAL SC', admissao: '2025-01-27', regiao: 'Joinville', ...custos },
+    ])).dados;
+    assert.deepEqual([r2.promotoresNovos, r2.promotoresAtualizados, r2.total], [1, 1, 7300]);
+
+    const lista = (await regis('/api/promotores?de=2026-10&ate=2026-10&tipo=CLT')).dados.promotores;
+    const m = lista.find((p) => p.codigo === '30' && p.nome.startsWith('Maria'));
+    assert.equal(m.nome, 'Maria Aparecida de Souza');
+    assert.equal(m.agencia, 'Filial PR (CLT)'); // manteve a agência que veio dos atendimentos
+    assert.equal(m.qtdLojas, 2);
+    assert.equal(m.custo, 3650); // salário + adicionais, dividido entre as duas lojas
+    assert.equal(m.situacao, 'sem_faturamento'); // lojas sem CNPJ não ligam com o faturamento do Focco
+    const detalhe = (await regis(`/api/promotores/${m.id}?de=2026-10&ate=2026-10`)).dados;
+    assert.deepEqual(detalhe.lojas.map((l) => [l.custo, l.dias]).sort(), [[1825, 'Qua'], [1825, 'Seg']]);
+    // Carlos tem salário mas nenhuma loja lançada: o custo aparece, marcado como "sem lojas".
+    const carlos = lista.find((p) => p.codigo === '77');
+    assert.deepEqual([carlos.custo, carlos.qtdLojas, carlos.situacao], [3650, 0, 'sem_lojas']);
+    assert.equal(lista.filter((p) => p.nome === 'PEDRO').length, 1);
+    // Repetir o cadastro não duplica ninguém.
+    const r3 = (await gravar('promotores', [{ nome: 'Maria Aparecida de Souza', codigo: '30', tipo: 'CLT', ...custos }])).dados;
+    assert.deepEqual([r3.promotoresNovos, r3.promotoresAtualizados], [0, 1]);
   });
 
   await t.test('o sistema não fica sem suporte', async () => {

@@ -13,7 +13,7 @@ async function carregar() {
     const { lojas, totais } = await api(`/api/faturamento?${parametros(filtros())}`);
     document.getElementById('linhas').innerHTML = lojas.map((l) => `
       <tr>
-        <td>${esc(l.loja.nome)}<span class="menor">${esc(cnpjFormatado(l.loja.cnpj))}</span></td>
+        <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}</span></td>
         <td>${esc([l.loja.cidade, l.loja.uf].filter(Boolean).join(' · '))}</td>
         <td class="num">${reais(l.faturamento)}</td>
         <td class="num">${l.visitas}</td>

@@ -9,7 +9,8 @@ async function carregar() {
     document.getElementById('primeiros-passos').hidden = !semDados;
 
     const classe = r.situacao === 'dentro' ? 'bom' : r.situacao === 'fora' || r.situacao === 'sem_faturamento' ? 'ruim' : '';
-    const semFat = r.semFaturamento ? ` · ${r.semFaturamento} sem faturamento` : '';
+    const outros = [r.semFaturamento && `${r.semFaturamento} sem faturamento`, r.semLojas && `${r.semLojas} sem lojas`].filter(Boolean);
+    const semFat = outros.length ? ` · ${outros.join(' · ')}` : '';
     document.getElementById('cards').innerHTML = `
       <div class="card">
         <div class="rotulo">Faturamento total</div>
@@ -19,7 +20,7 @@ async function carregar() {
       <div class="card">
         <div class="rotulo">Custo total dos promotores</div>
         <div class="valor">${reais(r.custoTotal)}</div>
-        <div class="detalhe">${r.promotores} promotor(es) com visita no período</div>
+        <div class="detalhe">${r.promotores} promotor(es)${r.custoSemLojas ? ` · ${reais(r.custoSemLojas)} sem loja lançada` : ''}</div>
       </div>
       <div class="card ${classe}">
         <div class="rotulo">Custo sobre o faturamento</div>

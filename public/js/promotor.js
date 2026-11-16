@@ -11,38 +11,43 @@ async function carregar() {
     const p = detalhe.promotor;
     document.title = `${p.nome} · Controle de Promotores`;
     document.getElementById('nome').textContent = p.nome;
-    document.getElementById('sub').innerHTML = `${esc(TIPOS[p.tipo])}${p.agencia ? ` · ${esc(p.agencia)}` : ''} · ${p.ativo ? 'Ativo' : 'Inativo'} ${etiqueta(detalhe.situacao)}`;
+    document.getElementById('sub').innerHTML = `${esc(TIPOS[p.tipo])}${p.agencia || p.empresa ? ` · ${esc(p.agencia || p.empresa)}` : ''} · ${p.ativo ? 'Ativo' : 'Inativo'} ${etiqueta(detalhe.situacao)}`;
 
-    const classe = detalhe.situacao === 'dentro' ? 'bom' : detalhe.situacao === 'fora' || detalhe.situacao === 'sem_faturamento' ? 'ruim' : '';
+    const classe = detalhe.situacao === 'dentro' ? 'bom' : ['fora', 'sem_faturamento', 'sem_lojas'].includes(detalhe.situacao) ? 'ruim' : '';
     document.getElementById('cards').innerHTML = `
       <div class="card ${classe}"><div class="rotulo">Custo sobre o faturamento</div><div class="valor">${pct(detalhe.percentual)}</div><div class="detalhe">Meta: até ${pct(detalhe.meta)}</div></div>
       <div class="card"><div class="rotulo">Custo no período</div><div class="valor">${reais(detalhe.custo)}</div></div>
       <div class="card"><div class="rotulo">Faturamento das lojas visitadas</div><div class="valor">${reais(detalhe.faturamento)}</div></div>
-      <div class="card"><div class="rotulo">Visitas</div><div class="valor">${detalhe.visitas}</div><div class="detalhe">em ${detalhe.lojas.length} loja(s)</div></div>`;
+      <div class="card"><div class="rotulo">Lojas atendidas</div><div class="valor">${detalhe.lojas.length}</div><div class="detalhe">${detalhe.visitas ? `${detalhe.visitas} visita(s) informada(s)` : 'quantidade de visitas não informada'}</div></div>`;
 
     const item = (rotulo, valor) => `<div><dt>${rotulo}</dt><dd>${valor}</dd></div>`;
     document.getElementById('ficha').innerHTML = [
-      item('Tipo', esc(TIPOS[p.tipo])), item('Agência', esc(p.agencia || '—')), item('Telefone', esc(p.telefone || '—')),
+      item('Tipo', esc(TIPOS[p.tipo])), item('Agência', esc(p.agencia || '—')), item('Empresa / grupo', esc(p.empresa || '—')),
+      item('Código', esc(p.codigo || '—')), item('Região', esc(p.regiao || '—')),
+      item('Admissão', p.admissao ? esc(p.admissao.split('-').reverse().join('/')) : '—'), item('Telefone', esc(p.telefone || '—')),
       ...CAMPOS_DINHEIRO.map(([campo, rotulo]) => item(rotulo, reais(p[campo]))),
       item('Custo fixo mensal (soma)', reais(p.custoFixo)), item('Observação', esc(p.observacao || '—')),
     ].join('');
     const informado = detalhe.lojas.some((l) => l.atendimentos.some((a) => a.custoInformado));
-    document.getElementById('regra').textContent = informado
-      ? 'Neste período, o custo veio da planilha de visitas (custo informado por loja).'
-      : 'Sem custo informado na planilha, o custo fixo mensal acima é dividido entre as lojas conforme as visitas.';
+    document.getElementById('regra').textContent = detalhe.custoSemLoja > 0
+      ? `Atenção: ${reais(detalhe.custoSemLoja)} do custo deste período não tem loja lançada. Sem saber quais lojas ele atende, não dá para comparar com o faturamento.`
+      : informado
+        ? 'Neste período, o custo veio da planilha de atendimentos (valor informado por loja).'
+        : 'Sem valor por loja na planilha, o custo fixo mensal acima é dividido entre as lojas (pelas visitas; sem visitas informadas, em partes iguais).';
 
     document.getElementById('linhas').innerHTML = detalhe.lojas.map((l, i) => `
       <tr>
-        <td>${esc(l.loja.nome)}<span class="menor">${esc(cnpjFormatado(l.loja.cnpj))}</span></td>
-        <td class="num">${l.visitas}</td>
+        <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}${l.loja.cidade ? ` · ${esc(l.loja.cidade)}` : ''}</span></td>
+        <td>${esc(l.dias || '—')}</td>
+        <td class="num">${l.visitas || '—'}</td>
         <td class="num">${reais(l.custo)}</td>
         <td class="num">${reais(l.faturamento)}</td>
         <td class="num">${pct(l.percentual)}</td>
         <td>${etiqueta(l.situacao)}</td>
         <td class="num"><button type="button" class="perigo pequeno" data-excluir="${i}" aria-label="Excluir visitas de ${esc(l.loja.nome)}">Excluir</button></td>
-      </tr>`).join('') || '<tr><td colspan="7" class="vazio">Nenhuma visita neste período.</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="8" class="vazio">Nenhuma loja lançada neste período.</td></tr>';
     document.getElementById('totais').innerHTML = detalhe.lojas.length ? `
-      <tr><td>Total</td><td class="num">${detalhe.visitas}</td><td class="num">${reais(detalhe.custo)}</td>
+      <tr><td>Total</td><td></td><td class="num">${detalhe.visitas || '—'}</td><td class="num">${reais(detalhe.custo)}</td>
       <td class="num">${reais(detalhe.faturamento)}</td><td class="num">${pct(detalhe.percentual)}</td><td></td><td></td></tr>` : '';
   } catch (erro) {
     mostrarAviso(aviso, erro.message);

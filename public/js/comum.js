@@ -38,9 +38,9 @@ function cnpjFormatado(cnpj) {
 }
 
 const SITUACOES = {
-  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
+  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
 };
-const TIPOS = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência' };
+const TIPOS = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência', FREELANCER: 'Freelancer' };
 const etiqueta = (situacao) => `<span class="etiqueta ${esc(situacao)}">${esc(SITUACOES[situacao] || situacao)}</span>`;
 
 function mostrarAviso(elemento, texto, tipo = 'erro') {

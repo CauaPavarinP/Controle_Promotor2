@@ -16,7 +16,7 @@ async function carregar() {
     document.getElementById('linhas').innerHTML = promotores.map((p) => `
       <tr class="clicavel" data-id="${p.id}">
         <td><a href="/promotor?id=${p.id}">${esc(p.nome)}</a>${p.ativo ? '' : ' <span class="etiqueta">Inativo</span>'}</td>
-        <td>${esc(TIPOS[p.tipo])}${p.agencia && p.agencia !== p.nome ? `<span class="menor">${esc(p.agencia)}</span>` : ''}</td>
+        <td>${esc(TIPOS[p.tipo])}${(p.agencia || p.empresa) && p.agencia !== p.nome ? `<span class="menor">${esc(p.agencia || p.empresa)}</span>` : ''}</td>
         <td class="num">${p.qtdLojas}</td>
         <td class="num">${p.visitas}</td>
         <td class="num">${reais(p.custo)}</td>

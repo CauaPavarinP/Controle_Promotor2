@@ -16,7 +16,7 @@ async function carregar({ de, ate }, empresa = '') {
   const [promotores, lojas, visitas, faturamentos] = await Promise.all([
     consulta('SELECT * FROM promotores'),
     consulta('SELECT id, nome, cnpj, cidade, uf FROM lojas'),
-    consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
+    consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
     consulta("SELECT loja_id, mes, valor FROM faturamento WHERE mes BETWEEN $1 AND $2 AND ($3 = '' OR empresa = $3)", [de, ate, empresa]),
   ]);
   return { ...calcular({ promotores, lojas, visitas, faturamentos, meta: config.meta }), cadastro: promotores };
@@ -50,7 +50,7 @@ async function listaDePromotores(query) {
     .map((p) => {
       const c = calculados.get(p.id);
       return {
-        id: p.id, nome: p.nome, tipo: p.tipo, agencia: p.agencia, ativo: p.ativo,
+        id: p.id, nome: p.nome, tipo: p.tipo, agencia: p.agencia, empresa: p.empresa, codigo: p.codigo, ativo: p.ativo,
         qtdLojas: c ? c.qtdLojas : 0,
         visitas: c ? c.visitas : 0,
         custo: c ? c.custo : 0,
@@ -59,9 +59,9 @@ async function listaDePromotores(query) {
         situacao: c ? c.situacao : 'sem_dados',
       };
     })
-    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca))
+    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || p.codigo === busca)
     .filter((p) => !query.tipo || p.tipo === query.tipo)
-    .filter((p) => !query.agencia || p.agencia === query.agencia)
+    .filter((p) => !query.agencia || p.agencia === query.agencia || p.empresa === query.agencia)
     .filter((p) => !query.situacao || p.situacao === query.situacao)
     .filter((p) => !query.ativo || String(p.ativo) === query.ativo)
     // Primeiro quem mais estoura a meta; quem não tem percentual vai para o fim.
@@ -80,6 +80,7 @@ async function detalheDoPromotor(id, query) {
     visitas: c ? c.visitas : 0,
     custo: c ? c.custo : 0,
     faturamento: c ? c.faturamento : 0,
+    custoSemLoja: c ? c.custoSemLoja : 0,
     percentual: c ? c.percentual : null,
     situacao: c ? c.situacao : 'sem_dados',
     lojas: c ? c.lojas : [],
@@ -97,11 +98,17 @@ function dinheiro(valor, rotulo) {
 function validarPromotor(dados) {
   const nome = String(dados.nome || '').trim();
   if (!nome) throw new ErroDeValidacao('Informe o nome do promotor.');
-  if (!['CLT', 'MEI', 'AGENCIA'].includes(dados.tipo)) throw new ErroDeValidacao('Escolha o tipo: CLT, MEI ou Agência.');
+  if (!['CLT', 'MEI', 'AGENCIA', 'FREELANCER'].includes(dados.tipo)) throw new ErroDeValidacao('Escolha o tipo: CLT, MEI, Agência ou Freelancer.');
+  const admissao = String(dados.admissao || '').trim();
+  if (admissao && !/^\d{4}-\d{2}-\d{2}$/.test(admissao)) throw new ErroDeValidacao('Data de admissão inválida.');
   const limpo = {
     nome,
     tipo: dados.tipo,
     agencia: String(dados.agencia || '').trim(),
+    codigo: String(dados.codigo || '').trim(),
+    empresa: String(dados.empresa || '').trim(),
+    regiao: String(dados.regiao || '').trim(),
+    admissao,
     telefone: String(dados.telefone || '').trim(),
     observacao: String(dados.observacao || '').trim(),
     ativo: dados.ativo === undefined ? true : Boolean(dados.ativo),
@@ -110,12 +117,15 @@ function validarPromotor(dados) {
   return limpo;
 }
 
-const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
+const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
 
 async function salvarPromotor(id, dados) {
   const p = validarPromotor(dados);
-  const [repetido] = await consulta('SELECT id FROM promotores WHERE lower(nome) = lower($1) AND id <> $2', [p.nome, id || 0]);
-  if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome.');
+  const [repetido] = await consulta(
+    'SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4',
+    [p.nome, p.agencia, p.codigo, id || 0],
+  );
+  if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
   const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
   if (id) {
     const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
@@ -152,8 +162,8 @@ async function opcoes() {
   const [meses, empresas, agencias, promotores, lojas] = await Promise.all([
     consulta('SELECT mes FROM faturamento UNION SELECT mes FROM visitas ORDER BY mes'),
     consulta("SELECT DISTINCT empresa FROM faturamento WHERE empresa <> '' ORDER BY empresa"),
-    consulta("SELECT DISTINCT agencia FROM promotores WHERE agencia <> '' ORDER BY agencia"),
-    consulta('SELECT id, nome, tipo FROM promotores WHERE ativo ORDER BY nome'),
+    consulta("SELECT agencia FROM promotores WHERE agencia <> '' UNION SELECT empresa FROM promotores WHERE empresa <> '' ORDER BY 1"),
+    consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome'),
     consulta('SELECT id, nome, cnpj FROM lojas ORDER BY nome'),
   ]);
   return {

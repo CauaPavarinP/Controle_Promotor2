@@ -84,3 +84,36 @@ test('duas empresas faturando para a mesma loja no mês são somadas', () => {
   assert.equal(r.promotores[0].faturamento, 3000);
   assert.equal(r.promotores[0].situacao, 'dentro');
 });
+
+test('CLT com salário e sem nenhuma loja lançada: o custo conta e a situação é "sem lojas"', () => {
+  const semLoja = { id: 30, nome: 'José', tipo: 'CLT', salario: 2500, ativo: true };
+  const novato = { id: 31, nome: 'Novo', tipo: 'CLT', salario: 2500, ativo: true, admissao: '2026-11-03' }; // admitido depois do mês
+  const inativo = { id: 32, nome: 'Saiu', tipo: 'CLT', salario: 2500, ativo: false };
+  const r = calcular({
+    promotores: [agencia, semLoja, novato, inativo], lojas, meta: 3,
+    visitas: [{ id: 1, promotor_id: 10, loja_id: 1, mes: '2026-10', qtd_visitas: 4, custo: 100 }],
+    faturamentos: [{ loja_id: 1, mes: '2026-10', valor: 10000 }],
+  });
+  const jose = r.promotores.find((p) => p.promotor.id === 30);
+  assert.equal(jose.custo, 2500);
+  assert.equal(jose.custoSemLoja, 2500);
+  assert.equal(jose.situacao, 'sem_lojas');
+  assert.equal(r.promotores.length, 2); // o admitido depois e o inativo não entram
+  assert.equal(r.resumo.custoTotal, 2600);
+  assert.equal(r.resumo.custoSemLojas, 2500);
+  assert.equal(r.resumo.semLojas, 1);
+  assert.equal(r.resumo.dentro, 1);
+});
+
+test('sem visitas informadas, o custo fixo é dividido em partes iguais entre as lojas', () => {
+  const r = calcular({
+    promotores: [clt], lojas, meta: 3,
+    visitas: [
+      { id: 1, promotor_id: 20, loja_id: 1, mes: '2026-10', qtd_visitas: 0, custo: null, dias_visita: 'Ter (1x/semana)' },
+      { id: 2, promotor_id: 20, loja_id: 2, mes: '2026-10', qtd_visitas: 0, custo: null },
+    ],
+    faturamentos: [],
+  });
+  assert.deepEqual(r.promotores[0].lojas.map((l) => l.custo), [1000, 1000]);
+  assert.equal(r.promotores[0].lojas.find((l) => l.loja.id === 1).dias, 'Ter (1x/semana)');
+});
