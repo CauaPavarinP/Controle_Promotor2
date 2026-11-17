@@ -24,6 +24,31 @@ function pendenciasDe(s) {
   return lista;
 }
 
+// "Verificar" (não conta como pendência): outro supervisor do cadastro com o nome completo igual, ou em que um
+// nome é o começo do outro (ex.: "Leo" e "Leonardo Silva"). Não usa só o primeiro nome, para não marcar nomes
+// comuns. Compara com o cadastro inteiro, não só com quem aparece no período.
+let todosSupervisores = [];
+function parecidosCom(s) {
+  const meu = comparavel(s.nome);
+  if (meu.length < 3 || NOMES_GENERICOS.has(meu)) return [];
+  return todosSupervisores.filter((outro) => {
+    const dele = comparavel(outro.nome);
+    if (outro.id === s.id || dele.length < 3 || NOMES_GENERICOS.has(dele)) return false;
+    return dele === meu || dele.startsWith(meu) || meu.startsWith(dele);
+  }).map((outro) => outro.nome);
+}
+
+function marcadores(s) {
+  const pend = pendenciasDe(s).map((p) => `<span class="marca marca-pendencia" title="${p.tipo === 'sem-codigo'
+    ? 'Cadastro sem código. Use Editar para informar, se houver.'
+    : 'Nome que não identifica uma pessoa (veio assim na planilha). Veja os promotores dele e use Juntar com o supervisor certo, ou Excluir.'}">⚠ ${p.texto}</span>`);
+  const parecidos = parecidosCom(s);
+  if (parecidos.length) {
+    pend.push(`<span class="marca marca-verificar" title="Pode ser a mesma pessoa que ${esc(parecidos.join(', '))}. Se for, use Juntar.">Verificar: parecido com ${esc(parecidos.join(', '))}</span>`);
+  }
+  return pend.length ? `<span class="marcas">${pend.join('')}</span>` : '';
+}
+
 // Promotores diferentes que têm algum supervisor (o mesmo promotor pode estar em mais de um supervisor).
 const idsComSupervisor = (supervisores) => new Set(supervisores.flatMap((s) => s.promotores.map((p) => p.id)));
 
@@ -140,6 +165,7 @@ async function carregar() {
   const aviso = el('aviso');
   try {
     dados = await api(`/api/supervisores?${parametros(filtrosAtuais())}`);
+    todosSupervisores = (await carregarOpcoes()).supervisores || [];
     mostrarAviso(aviso, '');
     mostrarAvisos(dados.avisos);
     montarSeletorAgencia();
@@ -159,8 +185,8 @@ function desenharTabela() {
     : `Mostrando ${visiveis.length} de ${plural(dados.supervisores.length, 'supervisor', 'supervisores')}`;
   el('linhas').innerHTML = visiveis.map((s) => `
       <tr class="${abertos.has(s.id) ? 'aberto' : ''}" data-linha="${s.id}">
-        <td><strong>${esc(s.nome)}</strong><span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
-        <td>${esc(s.codigo || '—')}</td>
+        <td><strong>${esc(s.nome)}</strong>${marcadores(s)}<span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
+        <td>${s.codigo ? esc(s.codigo) : '<span class="menor-inline">—</span>'}</td>
         <td class="num">${chipAbrir(s, s.promotores.length, 'promotor', 'promotores')}</td>
         <td class="num">${chipAbrir(s, s.agencias.length, 'agência', 'agências')}</td>
         <td class="num">${chipTexto(s.lojas, 'loja', 'lojas')}</td>
