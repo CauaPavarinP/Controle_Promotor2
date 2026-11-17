@@ -210,11 +210,16 @@ dialog form { padding: 20px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 td details summary { cursor: pointer; color: var(--principal); font-weight: 600; }
 
-/* Tela Supervisores: o número abre a lista na linha de baixo, na largura da tabela. */
-.botao-abrir { background: none; border: 0; padding: 2px 6px; margin-left: -6px; border-radius: 6px; color: var(--principal); font: inherit; font-weight: 600; cursor: pointer; }
-.botao-abrir::before { content: '▸ '; }
-.botao-abrir[aria-expanded="true"]::before { content: '▾ '; }
-.botao-abrir:hover { background: var(--cinza-fundo); }
+/* Tela Supervisores: chips com a quantidade e o rótulo; os de promotores e agências abrem a lista embaixo. */
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 13px; line-height: 1.4;
+  white-space: nowrap; font-variant-numeric: tabular-nums; border: 1px solid transparent; }
+.chip-abrir { background: #e8eff6; color: var(--principal); border-color: #c9d8e7; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.chip-abrir:hover { background: #d9e6f2; }
+.chip-abrir .seta::after { content: '▾'; font-size: 11px; }
+.chip-abrir[aria-expanded="true"] { background: var(--principal); color: #fff; border-color: var(--principal); }
+.chip-abrir[aria-expanded="true"] .seta::after { content: '▴'; }
+.chip-texto { background: var(--cinza-fundo); color: var(--texto); }
+.chip-zero { color: var(--texto-fraco); }
 tr.aberto > td { border-bottom-color: transparent; background: #f7f9fb; }
 tr.detalhe-sup > td { background: #f7f9fb; padding: 4px 16px 16px; }
 .detalhe-sup-titulo { font-size: 13px; font-weight: 600; color: var(--texto-fraco); margin: 8px 0 4px; }

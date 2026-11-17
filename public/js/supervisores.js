@@ -42,12 +42,15 @@ function desenharCards() {
         <button type="button" class="link" id="ver-pendencias">${filtroTela.soPendencias ? 'mostrar todos' : 'ver só esses'}</button></div></div>`;
 }
 
-// Botão com a quantidade. Ao clicar, abre a lista na linha de baixo, na largura da tabela.
-function botaoAbrir(s, quantidade, nome) {
-  if (!quantidade) return '—';
-  return `<button type="button" class="botao-abrir" data-abrir="${s.id}" aria-expanded="${abertos.has(s.id)}" aria-controls="detalhe-${s.id}"
-    title="Ver ${nome} de ${esc(s.nome)}">${quantidade}</button>`;
+// Chip com a quantidade e o que ela é ("37 promotores"). O de promotores e o de agências abrem a lista na linha
+// de baixo; o de lojas é só informação.
+function chipAbrir(s, quantidade, um, varios) {
+  if (!quantidade) return `<span class="chip chip-zero">0 ${varios}</span>`;
+  return `<button type="button" class="chip chip-abrir" data-abrir="${s.id}" aria-expanded="${abertos.has(s.id)}" aria-controls="detalhe-${s.id}"
+    title="Abrir os promotores de ${esc(s.nome)}, por agência">${plural(quantidade, um, varios)}<span class="seta" aria-hidden="true"></span></button>`;
 }
+const chipTexto = (quantidade, um, varios) => (quantidade
+  ? `<span class="chip chip-texto">${plural(quantidade, um, varios)}</span>` : `<span class="chip chip-zero">0 ${varios}</span>`);
 
 function linhaDetalhe(s) {
   return `<tr class="detalhe-sup" id="detalhe-${s.id}" ${abertos.has(s.id) ? '' : 'hidden'}><td colspan="6">
@@ -115,9 +118,9 @@ function desenharTabela() {
       <tr class="${abertos.has(s.id) ? 'aberto' : ''}" data-linha="${s.id}">
         <td><strong>${esc(s.nome)}</strong><span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
         <td>${esc(s.codigo || '—')}</td>
-        <td class="num">${botaoAbrir(s, s.promotores.length, 'os promotores')}</td>
-        <td class="num">${botaoAbrir(s, s.agencias.length, 'as agências')}</td>
-        <td class="num">${s.lojas || '—'}</td>
+        <td class="num">${chipAbrir(s, s.promotores.length, 'promotor', 'promotores')}</td>
+        <td class="num">${chipAbrir(s, s.agencias.length, 'agência', 'agências')}</td>
+        <td class="num">${chipTexto(s.lojas, 'loja', 'lojas')}</td>
         <td class="num">
           <button type="button" class="secundario pequeno" data-editar="${s.id}">Editar</button>
           <button type="button" class="secundario pequeno" data-juntar="${s.id}">Juntar</button>
