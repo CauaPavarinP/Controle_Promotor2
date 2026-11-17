@@ -210,15 +210,102 @@ dialog form { padding: 20px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 td details summary { cursor: pointer; color: var(--principal); font-weight: 600; }
 
-/* Tela Supervisores: o número abre a lista na linha de baixo, na largura da tabela. */
-.botao-abrir { background: none; border: 0; padding: 2px 6px; margin-left: -6px; border-radius: 6px; color: var(--principal); font: inherit; font-weight: 600; cursor: pointer; }
-.botao-abrir::before { content: '▸ '; }
-.botao-abrir[aria-expanded="true"]::before { content: '▾ '; }
-.botao-abrir:hover { background: var(--cinza-fundo); }
+/* Tela Supervisores: chips com a quantidade e o rótulo; os de promotores e agências abrem a lista embaixo. */
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 13px; line-height: 1.4;
+  white-space: nowrap; font-variant-numeric: tabular-nums; border: 1px solid transparent; }
+.chip-abrir { background: #e8eff6; color: var(--principal); border-color: #c9d8e7; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.chip-abrir:hover { background: #d9e6f2; }
+.chip-abrir .seta::after { content: '▾'; font-size: 11px; }
+.chip-abrir[aria-expanded="true"] { background: var(--principal); color: #fff; border-color: var(--principal); }
+.chip-abrir[aria-expanded="true"] .seta::after { content: '▴'; }
+.chip-texto { background: var(--cinza-fundo); color: var(--texto); }
+.chip-zero { color: var(--texto-fraco); }
 tr.aberto > td { border-bottom-color: transparent; background: #f7f9fb; }
 tr.detalhe-sup > td { background: #f7f9fb; padding: 4px 16px 16px; }
-.detalhe-sup-titulo { font-size: 13px; font-weight: 600; color: var(--texto-fraco); margin: 8px 0 4px; }
+.detalhe-sup-titulo { font-size: 13px; font-weight: 600; color: var(--texto-fraco); margin: 8px 0 10px; }
+.grupos-agencia { columns: 3 280px; column-gap: 12px; }
+.grupo-agencia { background: var(--painel); border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; break-inside: avoid; }
+.grupo-agencia h3 .menor-inline { white-space: nowrap; }
+.grupo-agencia h3 { font-size: 13.5px; margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
+.grupo-agencia ul { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }
+.grupo-agencia li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px dashed var(--borda); }
+.grupo-agencia li:first-child { border-top: 0; }
+.grupo-agencia .lojas { color: var(--texto-fraco); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .grade-nomes { list-style: none; margin: 0; padding: 0; columns: 3 260px; column-gap: 24px; font-size: 13.5px; }
 .grade-nomes li { break-inside: avoid; padding: 3px 0; }
-.detalhe-sup-agencias { margin: 0; font-size: 13.5px; }
 @media print { tr.detalhe-sup[hidden] { display: none; } }
+
+/* ---------- Tela Supervisores ---------- */
+.card.atencao { border-left: 5px solid #d9a300; }
+.card.atencao .valor { color: var(--amarelo); }
+.barra-tabela { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+.barra-tabela .campo.largo { max-width: 360px; }
+.barra-tabela .caixa { display: flex; align-items: center; gap: 6px; font-size: 14px; padding-bottom: 8px; cursor: pointer; }
+.barra-tabela .contagem { margin-left: auto; padding-bottom: 8px; font-size: 13px; color: var(--texto-fraco); }
+button.link { all: unset; cursor: pointer; color: var(--principal); text-decoration: underline; font-size: 13px; }
+button.link:focus-visible { outline: 2px solid var(--principal); outline-offset: 2px; }
+/* Cabeçalho que fica no topo ao rolar a página; colunas de número estreitas e à direita. */
+.tabela-sup thead th { position: sticky; top: 0; z-index: 2; background: var(--painel); box-shadow: inset 0 -1px 0 var(--borda); }
+.tabela-sup td:first-child { min-width: 260px; }
+.tabela-sup th.num, .tabela-sup td.num { width: 1%; padding-left: 18px; }
+.tabela-sup td:nth-child(2) { width: 1%; white-space: nowrap; }
+.tabela-sup td:last-child, .tabela-sup th:last-child { width: 1%; white-space: nowrap; text-align: right; }
+.tabela-sup .info { color: var(--texto-fraco); font-weight: 400; cursor: help; }
+/* Menu "⋯" das ações de cada supervisor */
+.menu-acoes { position: relative; display: inline-block; }
+.botao-mais { background: transparent; color: var(--texto-fraco); border: 1px solid transparent; padding: 2px 10px; font-size: 18px; line-height: 1; border-radius: 6px; }
+.botao-mais:hover, .botao-mais[aria-expanded="true"] { background: var(--cinza-fundo); color: var(--texto); border-color: var(--borda); }
+.menu-lista { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 230px; background: var(--painel);
+  border: 1px solid var(--borda); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .14); padding: 4px; text-align: left; }
+.menu-lista [role="menuitem"] { display: block; width: 100%; text-align: left; background: transparent; color: var(--texto); border: 0;
+  padding: 7px 10px; border-radius: 6px; font-weight: 600; font-size: 14px; }
+.menu-lista [role="menuitem"]:hover, .menu-lista [role="menuitem"]:focus-visible { background: var(--cinza-fundo); }
+.menu-lista small { display: block; font-weight: 400; font-size: 12px; color: var(--texto-fraco); }
+.menu-lista .item-perigo { color: var(--vermelho); }
+.menu-lista .item-perigo:hover { background: var(--vermelho-fundo); }
+/* Pendências (amarelo, contam no card) e "verificar" (cinza-azulado, não contam) ao lado do nome do supervisor */
+.marcas { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.marca { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 1.5; cursor: help; white-space: nowrap; }
+.marca-pendencia { background: var(--amarelo-fundo); color: var(--amarelo); border: 1px solid #efd58f; }
+.marca-verificar { background: #eef1f6; color: #3d4f63; border: 1px dashed #9fb0c3; }
+/* Promotores sem supervisor: tabela compacta agrupada por agência */
+.tabela-sem td, .tabela-sem th { padding: 6px 10px; font-size: 14px; }
+.tabela-sem tr.grupo-linha th { background: var(--cinza-fundo); color: var(--texto); font-size: 13.5px; padding: 7px 10px; }
+.tabela-sem tr.grupo-linha button.abrir { color: var(--texto); }
+.tabela-sem td:first-child { padding-left: 30px; }
+.tabela-sem .marca { margin-left: 6px; }
+/* Tela Supervisores no celular: cada supervisor vira um cartão (nome e ⋯ em cima, código, chips embaixo). */
+@media (max-width: 700px) {
+  #cards-sup { grid-template-columns: 1fr 1fr; gap: 10px; }
+  #cards-sup .card { padding: 12px; }
+  .barra-tabela .campo, .barra-tabela .campo.largo { flex: 1 1 100%; min-width: 0; max-width: none; }
+  .barra-tabela .contagem { margin-left: 0; padding-bottom: 0; }
+  .tabela-sup thead { display: none; }
+  .tabela-sup, .tabela-sup tbody { display: block; }
+  .tabela-sup tr[data-linha] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+  .tabela-sup tr[data-linha] > td { display: block; border: 0; padding: 0; width: auto; min-width: 0; text-align: left; }
+  .tabela-sup tr[data-linha] > td:first-child { flex: 1 1 calc(100% - 60px); order: 0; }
+  .tabela-sup tr[data-linha] > td.acoes-linha { order: 1; flex: 0 0 auto; }
+  .tabela-sup tr[data-linha] > td:nth-child(2) { order: 2; flex: 1 1 100%; font-size: 13px; color: var(--texto-fraco); }
+  .tabela-sup tr[data-linha] > td:nth-child(2)::before { content: 'Código: '; }
+  .tabela-sup tr[data-linha] > td.num { order: 3; }
+  .tabela-sup tr.aberto { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .tabela-sup tr.detalhe-sup { display: block; border: 1px solid var(--borda); border-top: 0; border-radius: 0 0 10px 10px; background: #f7f9fb; }
+  .tabela-sup tr.detalhe-sup[hidden] { display: none; }
+  .tabela-sup tr.detalhe-sup > td { display: block; border: 0; padding: 4px 10px 12px; }
+  .grupos-agencia { columns: 1; }
+  .tabela-sup { width: 100%; }
+  .tabela-sup tr.aberto > td { background: transparent; }
+  .tabela-sup tr.aberto { background: #f7f9fb; }
+  .detalhe-sup-titulo, .grupo-agencia, .grupo-agencia a { overflow-wrap: anywhere; min-width: 0; }
+  .grupo-agencia h3 { flex-wrap: wrap; }
+  .marcas { display: flex; margin: 4px 0 0; }
+  .tabela-sem th:nth-child(2), .tabela-sem td:nth-child(2) { display: none; }
+  .tabela-sem td:first-child { padding-left: 14px; }
+  .tabela-sem .marca { white-space: normal; }
+  .tabela-sem, .tabela-sem th, .tabela-sem td, .tabela-sem button.abrir { white-space: normal; overflow-wrap: anywhere; }
+  .tabela-sem th.num { width: 1%; }
+}
+/* A célula da lista aberta é a única da linha: não herda as regras da primeira e da última coluna. */
+.tabela-sup tr.detalhe-sup > td { white-space: normal; width: auto; min-width: 0; text-align: left; }
+#painel-sem-supervisor .ajuda { margin-bottom: 12px; }
