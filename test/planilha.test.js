@@ -215,3 +215,38 @@ test('acha pessoa pelo nome: completo, ou primeiro nome só se for único', () =
   assert.equal(acharPorNome('John Duarte', lista), null);
   assert.equal(acharPorNome('', lista), null);
 });
+
+test('separa o texto do supervisor em pessoas', () => {
+  const { separarSupervisores } = require('../src/planilha');
+  assert.deepEqual(separarSupervisores('Jesus, Leo'), ['Jesus', 'Leo']);
+  assert.deepEqual(separarSupervisores('Jesus e Leo'), ['Jesus', 'Leo']);
+  assert.deepEqual(separarSupervisores('Jesus/Leo; Ana'), ['Jesus', 'Leo', 'Ana']);
+  assert.deepEqual(separarSupervisores('Jesus, jesús'), ['Jesus']); // a mesma pessoa (sem acento) conta uma vez
+  assert.deepEqual(separarSupervisores(''), []);
+  // " e " não divide um nome já cadastrado.
+  assert.deepEqual(separarSupervisores('Maria Souza e Silva, Leo', new Set(['maria souza e silva'])), ['Maria Souza e Silva', 'Leo']);
+});
+
+test('linhas repetidas do mesmo promotor, loja e mês juntam os supervisores', () => {
+  const agrupador = criarAgrupador('visitas', { loja: 0, promotor: 1, agencia: 2, data: 3, supervisor: 4 }, {});
+  [['L', 'Ana', 'A', '10/2026', 'Leonardo'], ['L', 'Ana', 'A', '10/2026', 'Leo'], ['L', 'Ana', 'A', '10/2026', 'leo'], ['L', 'Ana', 'A', '10/2026', '']].forEach(agrupador.adicionar);
+  assert.equal(agrupador.resultado().itens[0].supervisor, 'Leonardo, Leo');
+});
+
+test('meses a importar: "todos" usa a data de cada linha; um mês escolhido deixa os outros de fora', () => {
+  const mapa = { loja: 0, cnpj: 1, valor: 2, data: 3 };
+  const linhas = [
+    ['Mercado Um', '11.222.333/0001-81', 100, '15/09/2026'],
+    ['Mercado Um', '11.222.333/0001-81', 200, '10/10/2026'],
+    ['Mercado Um', '11.222.333/0001-81', 50, ''], // sem data: vai para o mês da tela, se houver
+  ];
+  const ler = (opcoes) => { const a = criarAgrupador('faturamento', mapa, opcoes); linhas.forEach(a.adicionar); return a.resultado(); };
+
+  const todos = ler({});
+  assert.deepEqual(todos.itens.map((i) => [i.mes, i.valor]).sort(), [['2026-09', 100], ['2026-10', 200]]);
+  assert.deepEqual(todos.motivos, { 'Sem data/mês (informe o mês na tela)': 1 });
+
+  const outubro = ler({ mes: '2026-10' });
+  assert.deepEqual(outubro.itens.map((i) => [i.mes, i.valor]), [['2026-10', 250]]);
+  assert.deepEqual(outubro.motivos, { 'Fora do mês escolhido (2026-10)': 1 });
+});

@@ -1,7 +1,7 @@
 // Supervisores (cadastro separado dos promotores) e promotores que a importação não conseguiu identificar.
 const { consulta, transacao } = require('./db');
 const { normalizar, primeiroNome, ehSupervisor } = require('./planilha');
-const { gravarSupervisor } = require('./importar');
+const { gravarSupervisor } = require('./ligacaoSupervisor');
 const { ErroDeValidacao } = require('./auth');
 
 const texto = (v, tamanho) => String(v ?? '').replace(/\u0000/g, '').trim().slice(0, tamanho);
@@ -27,40 +27,37 @@ async function excluirSupervisor(id) {
   return apagados.length > 0;
 }
 
-// Promotores que hoje estão no cadastro de promotores com cargo de supervisor ("Sup", "Sup ll", "Supervisor"...).
-// A tela mostra esta lista e só move depois que a pessoa confirma.
-async function candidatosAMover() {
-  const promotores = await consulta(`SELECT p.id, p.nome, p.codigo, p.cargo, p.empresa, p.agencia,
-      p.salario + p.periculosidade + p.ajuda_celular + p.ajuda_custo + p.almoco + p.vale_transporte + p.gratificacao + p.outros_custos AS custo_fixo,
-      (SELECT count(*)::int FROM visitas v WHERE v.promotor_id = p.id) AS atendimentos
-    FROM promotores p WHERE p.cargo <> '' ORDER BY p.nome`);
-  return promotores.filter((p) => ehSupervisor(p.cargo));
+// Editar nome e código. O nome muda a "chave" (nome sem acento), que não pode repetir.
+async function editarSupervisor(id, dados) {
+  const nome = texto(dados.nome, 120);
+  if (!nome) throw new ErroDeValidacao('Informe o nome do supervisor.');
+  const [outro] = await consulta('SELECT id FROM supervisores WHERE chave = $1 AND id <> $2', [normalizar(nome), id]);
+  if (outro) throw new ErroDeValidacao('Já existe outro supervisor com esse nome. Use "Juntar" para unir os dois.');
+  const r = await consulta('UPDATE supervisores SET nome = $1, chave = $2, codigo = $3 WHERE id = $4 RETURNING id', [nome, normalizar(nome), texto(dados.codigo, 30), id]);
+  return r.length > 0;
 }
 
-// Move os promotores escolhidos para o cadastro de supervisores e apaga o promotor, numa transação só.
-// Quem tem atendimentos lançados como promotor não é movido (apagar o promotor apagaria esses atendimentos).
-async function moverParaSupervisores(ids) {
-  if (!Array.isArray(ids) || !ids.length || !ids.every((id) => Number.isInteger(id) && id > 0)) {
-    throw new ErroDeValidacao('Escolha quais promotores mover.');
-  }
+// Juntar: o supervisor "origem" é a mesma pessoa que o "destino" (ex.: "Leo" e "Leonardo Silva").
+// Os vínculos da origem passam para o destino e a origem é apagada. Numa transação só.
+async function juntarSupervisores(origemId, destinoId) {
+  if (!Number.isInteger(destinoId) || destinoId < 1 || destinoId === origemId) throw new ErroDeValidacao('Escolha com qual supervisor juntar.');
   return transacao(async (rodar) => {
-    const movidos = [];
-    const naoMovidos = [];
-    for (const id of ids) {
-      const [p] = await rodar('SELECT p.*, (SELECT count(*)::int FROM visitas v WHERE v.promotor_id = p.id) AS atendimentos FROM promotores p WHERE p.id = $1 FOR UPDATE', [id]);
-      if (!p || !ehSupervisor(p.cargo)) { naoMovidos.push({ id, motivo: 'não é (mais) um promotor com cargo de supervisor' }); continue; }
-      if (p.atendimentos > 0) { naoMovidos.push({ id, nome: p.nome, motivo: `tem ${p.atendimentos} atendimento(s) lançado(s) como promotor` }); continue; }
-      await gravarSupervisor(rodar, { nome: p.nome, codigo: p.codigo, cargo: p.cargo, empresa: p.empresa || p.agencia });
-      await rodar('DELETE FROM promotores WHERE id = $1', [id]);
-      movidos.push(p.nome);
-    }
-    return { movidos, naoMovidos };
+    const [origem] = await rodar('SELECT * FROM supervisores WHERE id = $1 FOR UPDATE', [origemId]);
+    const [destino] = await rodar('SELECT * FROM supervisores WHERE id = $1 FOR UPDATE', [destinoId]);
+    if (!origem || !destino) throw new ErroDeValidacao('Supervisor não encontrado.');
+    const movidos = await rodar(`INSERT INTO visita_supervisor (visita_id, supervisor_id)
+      SELECT visita_id, $2 FROM visita_supervisor WHERE supervisor_id = $1 ON CONFLICT DO NOTHING RETURNING 1`, [origemId, destinoId]);
+    await rodar(`UPDATE supervisores SET codigo = CASE WHEN codigo = '' THEN $2 ELSE codigo END,
+      empresa = CASE WHEN empresa = '' THEN $3 ELSE empresa END, usuario_id = coalesce(usuario_id, $4) WHERE id = $1`,
+    [destinoId, origem.codigo, origem.empresa, origem.usuario_id]);
+    await rodar('DELETE FROM supervisores WHERE id = $1', [origemId]); // os vínculos dela saem junto
+    return { atendimentos: movidos.length, supervisor: destino.nome };
   });
 }
 
 // ---------- Promotores não identificados ----------
 
-const PROMOTORES_DO_CADASTRO = "SELECT id, nome, agencia, empresa, codigo, tipo, cadastrado FROM promotores WHERE pendente = '' ORDER BY nome";
+const PROMOTORES_DO_CADASTRO = "SELECT id, nome, agencia, empresa, codigo, tipo, cargo, cadastrado FROM promotores WHERE pendente = '' ORDER BY nome";
 
 // Lista os pendentes, com sugestões: quem tem o mesmo primeiro nome (os da mesma agência/empresa primeiro).
 async function naoIdentificados() {
@@ -69,7 +66,7 @@ async function naoIdentificados() {
         (SELECT count(DISTINCT v.loja_id)::int FROM visitas v WHERE v.promotor_id = p.id) AS lojas,
         (SELECT string_agg(DISTINCT v.mes, ', ' ORDER BY v.mes) FROM visitas v WHERE v.promotor_id = p.id) AS meses
       FROM promotores p WHERE p.pendente <> '' ORDER BY p.agencia, p.nome`),
-    consulta(PROMOTORES_DO_CADASTRO),
+    consulta(PROMOTORES_DO_CADASTRO).then((lista) => lista.filter((c) => !ehSupervisor(c.cargo))), // supervisor não é opção
   ]);
   return {
     pendentes: pendentes.map((p) => {
@@ -91,7 +88,7 @@ async function ligarPromotor(pendenteId, destinoId) {
     const [pendente] = await rodar("SELECT * FROM promotores WHERE id = $1 AND pendente <> '' FOR UPDATE", [pendenteId]);
     if (!pendente) throw new ErroDeValidacao('Este promotor não está mais pendente.');
     const [destino] = await rodar("SELECT * FROM promotores WHERE id = $1 AND pendente = '' FOR UPDATE", [destinoId]);
-    if (!destino) throw new ErroDeValidacao('Promotor do cadastro não encontrado.');
+    if (!destino || ehSupervisor(destino.cargo)) throw new ErroDeValidacao('Promotor do cadastro não encontrado.');
 
     // Se o promotor do cadastro já tem atendimento na mesma loja e mês, junta os dois (soma visitas e valor).
     await rodar(`UPDATE visitas d SET qtd_visitas = d.qtd_visitas + o.qtd_visitas,
@@ -110,5 +107,5 @@ async function ligarPromotor(pendenteId, destinoId) {
 }
 
 module.exports = {
-  listarCadastro, criarSupervisor, excluirSupervisor, candidatosAMover, moverParaSupervisores, naoIdentificados, ligarPromotor,
+  listarCadastro, criarSupervisor, editarSupervisor, excluirSupervisor, juntarSupervisores, naoIdentificados, ligarPromotor,
 };

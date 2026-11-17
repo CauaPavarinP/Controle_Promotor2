@@ -199,3 +199,17 @@ test('aviso: atendimento com código que não achou ninguém no cadastro', () =>
   const av = avisosDe(a).find((x) => x.id === 'codigo_sem_cadastro');
   assert.deepEqual(av.itens, ['Filial — ZECA (código 99): 1 loja(s)']);
 });
+
+test('supervisores: "Jesus, Leo" aparece no filtro dos dois; promotor sem supervisor só some com filtro', () => {
+  const supervisores = [{ id: 1, nome: 'Jesus Angels', chave: 'jesus angels' }, { id: 2, nome: 'Leo', chave: 'leo' }];
+  const v1 = visita(10, 1, '2026-10', 100); const v2 = visita(11, 2, '2026-10', 100);
+  const dados = base({ visitas: [v1, v2], faturamentos: [], supervisores, vinculos: [{ visita_id: v1.id, supervisor_id: 1 }, { visita_id: v1.id, supervisor_id: 2 }] });
+  const todos = analisar(dados);
+  assert.deepEqual(todos.linhas.find((l) => l.id === v1.id).supervisorNomes, ['Jesus Angels', 'Leo']);
+  assert.deepEqual(todos.linhas.find((l) => l.id === v2.id).supervisorIds, []); // sem supervisor
+  assert.deepEqual(analisar({ ...dados, filtros: { supervisor: '1' } }).linhas.map((l) => l.id), [v1.id]);
+  assert.deepEqual(analisar({ ...dados, filtros: { supervisor: '2' } }).linhas.map((l) => l.id), [v1.id]);
+  assert.equal(analisar({ ...dados, filtros: { supervisor: 'Jesus' } }).linhas.length, 2); // texto antigo: ignorado
+  // O custo não muda por causa de supervisor: só o promotor tem custo.
+  assert.equal(somar(todos.linhas, 3).custo, 200);
+});

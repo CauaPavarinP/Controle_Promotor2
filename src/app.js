@@ -141,9 +141,14 @@ function criarApp() {
     if (!(await supervisores.excluirSupervisor(Number(req.params.id)))) return res.status(404).json({ erro: 'Supervisor não encontrado.' });
     res.json({ ok: true });
   });
-  // Mover para o cadastro de supervisores os promotores com cargo de supervisor (só o suporte; a tela pede confirmação).
-  api.get('/supervisores/mover', auth.exigirSuporte, async (req, res) => res.json(await supervisores.candidatosAMover()));
-  api.post('/supervisores/mover', auth.exigirSuporte, async (req, res) => res.json(await supervisores.moverParaSupervisores(req.body.ids)));
+  api.put('/supervisores/:id', async (req, res) => {
+    if (!(await supervisores.editarSupervisor(Number(req.params.id), req.body))) return res.status(404).json({ erro: 'Supervisor não encontrado.' });
+    res.json({ ok: true });
+  });
+  // Juntar dois supervisores que são a mesma pessoa (ex.: "Leo" e "Leonardo Silva").
+  api.post('/supervisores/:id/juntar', async (req, res) => {
+    res.json({ ok: true, ...(await supervisores.juntarSupervisores(Number(req.params.id), Number(req.body.destinoId))) });
+  });
 
   api.get('/promotores/:id', async (req, res) => {
     const detalhe = await relatorios.detalheDoPromotor(Number(req.params.id), req.query);

@@ -8,12 +8,12 @@ const urlTeste = process.env.DATABASE_URL_TESTE;
 
 test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE para rodar' }, async (t) => {
   process.env.DATABASE_URL = urlTeste;
-  const { consulta, iniciarBanco, fecharBanco } = require('../src/db');
+  const { consulta, iniciarBanco, fecharBanco, migrarSupervisores } = require('../src/db');
   const auth = require('../src/auth');
   const { criarApp } = require('../src/app');
   const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
 
-  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup, supervisores, vinculos_promotor,
+  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visita_supervisor, backup_promotores_supervisores, visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup, supervisores, vinculos_promotor,
     importacoes, promotores, lojas, usuarios CASCADE`);
 
   // Migração: um banco no formato antigo (faturamento por loja, CNPJ único na loja) tem que virar o novo
@@ -57,11 +57,13 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   ]);
   assert.equal((await consulta('SELECT count(*)::int AS n FROM visitas'))[0].n, 2);
   // Cargo separado do nome; nome de agência com " - " fica inteiro; quem tem salário vira "cadastrado".
+  // O supervisor ("Beto Souza - Sup ll") saiu dos promotores e foi para supervisores, com cópia do registro.
   assert.deepEqual(await consulta('SELECT nome, cargo, cadastrado FROM promotores ORDER BY id'), [
     { nome: 'Ana', cargo: '', cadastrado: false },
-    { nome: 'Beto Souza', cargo: 'Sup ll', cadastrado: true },
     { nome: '101 do Brasil - Filial PR (CLT)', cargo: '', cadastrado: false },
   ]);
+  assert.deepEqual(await consulta('SELECT nome, cargo FROM supervisores'), [{ nome: 'Beto Souza', cargo: 'Sup ll' }]);
+  assert.equal(Number((await consulta("SELECT dados->>'salario' AS s FROM backup_promotores_supervisores"))[0].s), 3000);
   assert.equal((await consulta('SELECT count(*)::int AS n FROM backup_faturamento_por_loja'))[0].n, 4); // cópia de segurança
   assert.equal((await consulta("SELECT to_regclass('public.faturamento') AS t"))[0].t, null);
 
@@ -360,38 +362,77 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.ok(!semLoja.itens.some((i) => i.startsWith('Joana')), 'supervisor não entra em "Promotores sem loja lançada"');
   });
 
-  await t.test('supervisores: ligados pelo nome da planilha; tela; filtro; mover promotor com confirmação', async () => {
+  await t.test('supervisores: "Jesus, Leo" vira 2 vínculos; acento; promotor sem supervisor; filtro, tela, juntar e desfazer', async () => {
     const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
     assert.equal((await regis('/api/supervisores', { method: 'POST', json: { nome: 'Jesus Angels Zapata Rivas', codigo: '19' } })).status, 200);
     assert.equal((await regis('/api/supervisores', { method: 'POST', json: { nome: 'JESUS ANGELS ZAPATA RIVAS' } })).status, 400); // repetido
-    const linha = (loja, supervisor) => ({ promotor: { nome: 'Carla', tipo: 'AGENCIA', agencia: 'Ag Sup' }, loja: { nome: loja, cnpj: '', cidade: 'W' }, mes: '2026-03', visitas: 1, custo: 50, supervisor });
-    const r = (await gravar({ tipo: 'visitas', arquivo: 'sup.xlsx', itens: [linha('Loja J1', 'Jesus'), linha('Loja J2', 'jesús'), linha('Loja L', 'Leo')] })).dados;
-    assert.equal(r.avisos['Supervisor da planilha que não está no cadastro de supervisores'], 1); // só o "Leo"
+    const linha = (promotor, loja, supervisor) => ({
+      promotor: { nome: promotor, tipo: 'AGENCIA', agencia: 'Ag Sup' }, loja: { nome: loja, cnpj: '', cidade: 'W' }, mes: '2026-03', visitas: 1, custo: 50, supervisor,
+    });
+    const arquivo = { tipo: 'visitas', arquivo: 'sup.xlsx', itens: [linha('Carla', 'Loja S1', 'Jesus, Leo'), linha('Carla', 'Loja S2', 'jesús'), linha('Dora', 'Loja S3', '')] };
+    const r = (await gravar(arquivo)).dados;
+    assert.equal(r.vinculosSupervisor, 3); // S1: Jesus e Leo; S2: Jesus; S3: nenhum
+    assert.deepEqual(r.supervisoresPorPrimeiroNome, ['Jesus → Jesus Angels Zapata Rivas']);
+    assert.deepEqual(r.supervisoresCriados, ['Leo']);
+    // Nenhum promotor foi criado a partir do nome de um supervisor.
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM promotores WHERE nome IN ('Jesus', 'Leo')"))[0].n, 0);
 
-    const d = (await regis('/api/supervisores?de=2026-03&ate=2026-03')).dados;
-    const jesus = d.supervisores.find((x) => x.nome === 'Jesus Angels Zapata Rivas');
-    assert.deepEqual([jesus.promotores.map((x) => x.nome), jesus.agencias, jesus.lojas.map((x) => x.nome)], [['Carla'], ['Ag Sup'], ['Loja J1', 'Loja J2']]);
-    assert.deepEqual(d.semCadastro.map((x) => [x.nome, x.lojas.length]), [['Leo', 1]]);
-    assert.ok(d.avisos.some((a) => a.id === 'supervisor_sem_cadastro'));
-    // O filtro "Supervisor" das outras telas continua funcionando.
-    const uf = (await regis('/api/lojas-uf?de=2026-03&ate=2026-03&supervisor=Jesus')).dados.linhas;
-    assert.deepEqual(uf.map((x) => x.loja).sort(), ['Loja J1', 'Loja J2']); // "jesús" e "Jesus" são o mesmo (sem acento)
+    const ids = Object.fromEntries((await consulta('SELECT id, nome FROM supervisores')).map((x) => [x.nome, x.id]));
+    const lojas = async (filtro) => (await regis(`/api/lojas-uf?de=2026-03&ate=2026-03${filtro}`)).dados.linhas.map((x) => x.loja).sort();
+    assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), ['Loja S1', 'Loja S2']);
+    assert.deepEqual(await lojas(`&supervisor=${ids.Leo}`), ['Loja S1']); // "Jesus, Leo" aparece no filtro dos dois
+    assert.deepEqual(await lojas('&supervisor=Jesus'), ['Loja S1', 'Loja S2', 'Loja S3']); // texto antigo no filtro é ignorado
+    const s1 = (await regis('/api/lojas-uf?de=2026-03&ate=2026-03')).dados.linhas.find((x) => x.loja === 'Loja S1');
+    assert.equal(s1.supervisor, 'Jesus Angels Zapata Rivas, Leo');
 
-    // Promotores com cargo de supervisor que já estavam no banco: a tela mostra e só move com confirmação.
-    await consulta(`INSERT INTO promotores (nome, tipo, cargo, codigo, empresa, salario) VALUES
-      ('Sup Sem Loja', 'CLT', 'Supervisor', '88', 'Empresa X', 4000), ('Sup Com Loja', 'CLT', 'Sup ll', '89', 'Empresa X', 4000)`);
-    const [comLoja] = await consulta("SELECT id FROM promotores WHERE nome = 'Sup Com Loja'");
-    const [loja] = await consulta("SELECT id FROM lojas WHERE nome = 'Loja L'");
-    await consulta("INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas) VALUES ($1, $2, '2026-03', 1)", [comLoja.id, loja.id]);
-    assert.equal((await regis('/api/supervisores/mover')).status, 403); // só o suporte
-    const candidatos = (await suporte('/api/supervisores/mover')).dados;
-    assert.deepEqual(candidatos.map((c) => [c.nome, c.atendimentos]), [['Sup Com Loja', 1], ['Sup Sem Loja', 0]]);
-    const movido = (await suporte('/api/supervisores/mover', { method: 'POST', json: { ids: candidatos.map((c) => c.id) } })).dados;
-    assert.deepEqual(movido.movidos, ['Sup Sem Loja']);
-    assert.match(movido.naoMovidos[0].motivo, /1 atendimento/);
-    assert.equal((await consulta("SELECT count(*)::int AS n FROM promotores WHERE nome = 'Sup Sem Loja'"))[0].n, 0);
-    assert.equal((await consulta("SELECT count(*)::int AS n FROM supervisores WHERE nome = 'Sup Sem Loja' AND codigo = '88'"))[0].n, 1);
-    assert.equal((await suporte('/api/supervisores/mover', { method: 'POST', json: { ids: [] } })).status, 400);
+    const tela = (await regis('/api/supervisores?de=2026-03&ate=2026-03')).dados;
+    const jesus = tela.supervisores.find((x) => x.nome === 'Jesus Angels Zapata Rivas');
+    assert.deepEqual([jesus.promotores.map((x) => [x.nome, x.lojas]), jesus.agencias, jesus.lojas], [[['Carla', 2]], ['Ag Sup'], 2]);
+    assert.deepEqual(tela.semSupervisor.map((x) => x.nome), ['Dora']); // promotor sem supervisor
+    // Supervisor nunca aparece como promotor (lista, seletor, "Ligar a").
+    const nomesPromotores = (await regis('/api/promotores?de=2026-03&ate=2026-03')).dados.promotores.map((x) => x.nome);
+    assert.ok(!nomesPromotores.some((n) => /jesus|leo/i.test(n)));
+    assert.equal((await regis('/api/promotores', { method: 'POST', json: { nome: 'Fulano', tipo: 'CLT', cargo: 'Supervisor' } })).status, 400);
+
+    // Reimportar (substitui o mês da agência) e desfazer: os vínculos voltam a partir do texto original.
+    await gravar({ ...arquivo, arquivo: 'sup-v2.xlsx', itens: [linha('Carla', 'Loja S1', 'Leo')] });
+    assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), []);
+    const imp = (await regis('/api/importacoes')).dados.find((i) => i.arquivo === 'sup-v2.xlsx');
+    assert.equal((await regis(`/api/importacoes/${imp.id}`, { method: 'DELETE' })).status, 200);
+    assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), ['Loja S1', 'Loja S2']);
+
+    // Juntar: "Leo" é a mesma pessoa que o Jesus (só para o teste). Os vínculos passam, sem duplicar.
+    assert.equal((await regis(`/api/supervisores/${ids.Leo}`, { method: 'PUT', json: { nome: 'jesus angels zapata rivas' } })).status, 400);
+    const j = (await regis(`/api/supervisores/${ids.Leo}/juntar`, { method: 'POST', json: { destinoId: ids['Jesus Angels Zapata Rivas'] } })).dados;
+    assert.equal(j.supervisor, 'Jesus Angels Zapata Rivas');
+    assert.equal((await consulta('SELECT count(*)::int AS n FROM supervisores WHERE id = $1', [ids.Leo]))[0].n, 0);
+    assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), ['Loja S1', 'Loja S2']);
+  });
+
+  await t.test('migração de supervisores: cargo ou nome completo (nunca o primeiro nome); com atendimento fica no aviso; rodar de novo não duplica', async () => {
+    await consulta("INSERT INTO supervisores (nome, chave) VALUES ('Marta Reis', 'marta reis')");
+    await consulta(`INSERT INTO promotores (nome, tipo, agencia, cargo, salario) VALUES
+      ('MARTA REIS', 'AGENCIA', 'Ag M', '', 0), ('Marta', 'AGENCIA', 'Ag M', '', 0),
+      ('Rita Gomes', 'CLT', '', 'Sup. l', 4000), ('Paulo Sup', 'CLT', 'Ag M', 'Supervisor', 3000)`);
+    const [paulo] = await consulta("SELECT id FROM promotores WHERE nome = 'Paulo Sup'");
+    const [loja] = await consulta("SELECT id FROM lojas WHERE nome = 'Loja S3'");
+    // Atendimento antigo com o supervisor só como texto (sem vínculo): a migração cria os vínculos.
+    const [v] = await consulta("INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, supervisor) VALUES ($1, $2, '2026-03', 1, 'Marta Reis / Rita Gomes') RETURNING id", [paulo.id, loja.id]);
+    const r1 = await migrarSupervisores();
+    assert.deepEqual(r1.movidos.sort(), ['MARTA REIS (nome igual ao de um supervisor)', 'Rita Gomes (Sup. l)']);
+    assert.deepEqual(r1.noAviso, ['Paulo Sup (Supervisor, 1 atendimento(s))']);
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM promotores WHERE nome = 'Marta'"))[0].n, 1); // homônimo pelo primeiro nome fica
+    const vinculos = await consulta('SELECT s.nome FROM visita_supervisor vs JOIN supervisores s ON s.id = vs.supervisor_id WHERE vs.visita_id = $1 ORDER BY 1', [v.id]);
+    assert.deepEqual(vinculos.map((x) => x.nome), ['MARTA REIS', 'Rita Gomes']);
+    assert.equal((await consulta("SELECT dados->>'salario' AS s FROM backup_promotores_supervisores WHERE dados->>'nome' = 'Rita Gomes'"))[0].s, '4000');
+    const contar = async () => (await consulta('SELECT (SELECT count(*) FROM supervisores) + (SELECT count(*) FROM visita_supervisor) + (SELECT count(*) FROM promotores) AS n'))[0].n;
+    const antes = await contar();
+    const r2 = await migrarSupervisores();
+    assert.deepEqual([r2.movidos, r2.vinculos], [[], 0]);
+    assert.equal(await contar(), antes);
+    // O supervisor que ficou como promotor aparece no aviso das telas.
+    const avisos = (await regis('/api/resumo?de=2026-03&ate=2026-03')).dados.avisos;
+    assert.match(avisos.find((a) => a.id === 'supervisor_como_promotor').itens[0], /^Paulo Sup \(Supervisor\)/);
   });
 
   await t.test('promotor sem código: nome completo + agência; primeiro nome só se único; senão pendente e ligação à mão', async () => {

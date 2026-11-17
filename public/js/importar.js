@@ -93,6 +93,7 @@ function ajustarExtras() {
   const cadastrarNovo = escolherPromotor && el('promotor').value === 'novo';
   for (const campo of document.querySelectorAll('[data-so]')) campo.hidden = campo.dataset.so !== tipo;
   el('campo-mes').hidden = tipo === 'promotores';
+  ajustarMeses(mapa.data !== undefined);
   el('campo-promotor').hidden = !escolherPromotor;
   for (const campo of document.querySelectorAll('[data-novo]')) campo.hidden = true;
   el('novo-nome').closest('.campo').hidden = !cadastrarNovo;
@@ -102,6 +103,22 @@ function ajustarExtras() {
   document.querySelector('label[for="novo-tipo"]').textContent = cadastrarNovo ? 'Tipo' : 'Tipo dos promotores (a planilha não tem essa coluna)';
   if (tipo === 'promotores' && mapa.tipo === undefined && !el('novo-tipo').dataset.mexido) el('novo-tipo').value = 'CLT';
   el('titulo-extras').hidden = ![...document.querySelectorAll('#extras > .campo')].some((campo) => !campo.hidden);
+}
+
+// Lista de meses. Com coluna de data no arquivo, a primeira opção é "Todos os meses do arquivo" (cada linha vai
+// para o mês da sua data); escolhendo um mês, só as linhas daquele mês entram. Sem coluna de data, é preciso
+// escolher o mês, e todas as linhas vão para ele.
+function ajustarMeses(temData) {
+  const campo = el('mes');
+  const atual = campo.value;
+  campo.innerHTML = (temData ? '<option value="todos">Todos os meses do arquivo</option>' : '<option value="">— escolha —</option>')
+    + ultimosMeses().map((m) => `<option value="${m}">${rotuloMes(m)}</option>`).join('');
+  campo.value = (atual === 'todos' || atual === '') ? (temData ? 'todos' : '') : atual;
+  el('ajuda-mes').textContent = !temData
+    ? 'O arquivo não tem coluna de data: todas as linhas vão para o mês escolhido.'
+    : campo.value === 'todos'
+      ? 'Cada linha vai para o mês da sua data. A confirmação mostra cada mês que será substituído.'
+      : `Só as linhas de ${rotuloMes(campo.value)} entram (e as sem data). As de outros meses ficam de fora.`;
 }
 
 function mostrarConferencia() {
@@ -165,8 +182,8 @@ async function analisar(nomeAba) {
 // O que a pessoa informou na tela e não está no arquivo (mês, empresa, promotor).
 function opcoesDaTela(tipo, mapa) {
   if (tipo === 'promotores') return { promotorNovo: { tipo: el('novo-tipo').value } };
-  const opcoes = { mes: el('mes').value };
-  if (mapa.data === undefined && !opcoes.mes) throw new Error('Escolha o mês das informações (o arquivo não tem coluna de data).');
+  const opcoes = { mes: el('mes').value === 'todos' ? '' : el('mes').value }; // vazio = todos os meses do arquivo
+  if (mapa.data === undefined && !opcoes.mes) throw new Error('Escolha o mês (o arquivo não tem coluna de data).');
   if (tipo === 'faturamento') {
     opcoes.empresa = el('empresa').value.trim();
     return opcoes;
@@ -240,6 +257,9 @@ async function confirmar() {
     if (r.clientesNovos) partes.push(`${r.clientesNovos} CNPJ(s) novo(s) no faturamento do ERP.`);
     if (r.promotoresNovos) partes.push(`${r.promotoresNovos} promotor(es) novo(s) cadastrado(s).`);
     if (r.promotoresAtualizados) partes.push(`${r.promotoresAtualizados} promotor(es) atualizado(s).`);
+    if (r.vinculosSupervisor) partes.push(`${r.vinculosSupervisor} vínculo(s) de atendimento com supervisor.`);
+    if ((r.supervisoresCriados || []).length) partes.push(`Supervisores novos criados a partir da planilha (confira a grafia): ${r.supervisoresCriados.join(', ')}.`);
+    if ((r.supervisoresPorPrimeiroNome || []).length) partes.push(`Ligados pelo primeiro nome (confira): ${r.supervisoresPorPrimeiroNome.join('; ')}.`);
     if (r.supervisoresNovos || r.supervisoresAtualizados) partes.push(`${(r.supervisoresNovos || 0) + (r.supervisoresAtualizados || 0)} supervisor(es) foram para o cadastro de supervisores.`);
     if (r.ignoradas) partes.push(`${r.ignoradas} linha(s) ignorada(s): ${lista(r.motivos)}.`);
     if (Object.keys(r.avisos || {}).length) partes.push(`Para conferir: ${lista(r.avisos)}.`);
@@ -308,7 +328,8 @@ async function desfazer(evento) {
 
 (async () => {
   await iniciarPagina();
-  el('mes').innerHTML = `<option value="">— escolha —</option>${ultimosMeses().map((m) => `<option value="${m}">${rotuloMes(m)}</option>`).join('')}`;
+  ajustarMeses(false);
+  el('mes').addEventListener('change', ajustarExtras);
   await carregarListas();
   el('tipo').addEventListener('change', () => { el('ajuda-tipo').textContent = AJUDA[el('tipo').value]; analisar(); });
   el('arquivo').addEventListener('change', () => analisar());

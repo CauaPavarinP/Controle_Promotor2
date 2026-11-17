@@ -260,6 +260,7 @@ const CAMPOS_FILTRO = [
 ];
 let filtros = {};
 let aoMudarFiltros = () => {};
+let nomesDosSupervisores = new Map(); // id -> nome, para a etiqueta do filtro
 
 function lerFiltrosGuardados() {
   try { return JSON.parse(sessionStorage.getItem('filtros')) || {}; } catch { return {}; }
@@ -271,6 +272,10 @@ function guardarFiltros() {
 function montarFiltros(opcoes, aoMudar) {
   aoMudarFiltros = aoMudar;
   filtros = lerFiltrosGuardados();
+  // O filtro de supervisor é o id do supervisor. Um texto antigo guardado no navegador é descartado.
+  const supervisores = (opcoes.supervisores || []).filter((sup) => sup && typeof sup === 'object');
+  nomesDosSupervisores = new Map(supervisores.map((sup) => [String(sup.id), sup.nome]));
+  if (filtros.supervisor && !nomesDosSupervisores.has(String(filtros.supervisor))) { delete filtros.supervisor; guardarFiltros(); }
   const opcoesDe = (lista, rotulo = (v) => v) => lista.map((v) => `<option value="${esc(v)}">${esc(rotulo(v))}</option>`).join('');
   document.getElementById('filtros-comuns').innerHTML = `
     <div class="campo"><label for="f-modo">Período</label>
@@ -280,7 +285,7 @@ function montarFiltros(opcoes, aoMudar) {
     <div class="campo"><label for="f-agencia">Agência</label><select id="f-agencia"><option value="">Todas</option>${opcoesDe(opcoes.agencias)}</select></div>
     <div class="campo"><label for="f-tipo">Tipo</label><select id="f-tipo"><option value="">Todos</option>${opcoesDe(Object.keys(TIPOS), (t) => TIPOS[t])}</select></div>
     <div class="campo estreito"><label for="f-uf">UF</label><select id="f-uf"><option value="">Todas</option>${opcoesDe(opcoes.ufs)}<option value="-">Sem UF</option></select></div>
-    <div class="campo"><label for="f-supervisor">Supervisor</label><select id="f-supervisor"><option value="">Todos</option>${opcoesDe(opcoes.supervisores)}</select></div>
+    <div class="campo"><label for="f-supervisor">Supervisor</label><select id="f-supervisor"><option value="">Todos</option>${supervisores.map((sup) => `<option value="${sup.id}">${esc(sup.nome)}</option>`).join('')}</select></div>
     <div class="campo"><label for="f-municipio">Município</label><input id="f-municipio" list="lista-municipios" autocomplete="off" placeholder="Todos">
       <datalist id="lista-municipios">${opcoesDe(opcoes.municipios)}</datalist></div>
     <div class="campo"><label for="f-mercado">Mercado</label><input id="f-mercado" list="lista-mercados" autocomplete="off" placeholder="Loja ou rede">
@@ -348,6 +353,7 @@ function desenharEtiquetas() {
   const valorDe = (campo) => {
     if (campo === 'tipo') return TIPOS[filtros.tipo] || filtros.tipo;
     if (campo === 'uf' && filtros.uf === '-') return 'sem UF';
+    if (campo === 'supervisor') return nomesDosSupervisores.get(String(filtros.supervisor)) || filtros.supervisor;
     return filtros[campo];
   };
   document.getElementById('etiquetas').innerHTML = `

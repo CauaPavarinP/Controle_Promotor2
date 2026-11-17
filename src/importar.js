@@ -2,8 +2,9 @@
 // O navegador já leu o arquivo e somou as linhas (ver public/js/planilha-comum.js). Aqui chegam só os
 // "itens" prontos. Mesmo assim conferimos tudo de novo: o servidor nunca confia no que vem do navegador.
 const { transacao, consulta } = require('./db');
+const { gravarSupervisor, ligarAtendimentos } = require('./ligacaoSupervisor');
 const {
-  mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, normalizar, ehSupervisor, acharPorNome, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
+  mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, normalizar, ehSupervisor, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
 } = require('./planilha');
 
 class ErroDeImportacao extends Error {}
@@ -241,7 +242,8 @@ async function carregarPromotores(rodar) {
   const porId = new Map();
   const lista = [];
   const incluir = (p) => { porId.set(p.id, p); lista.push(p); };
-  for (const p of await rodar('SELECT * FROM promotores ORDER BY id')) incluir(p);
+  // Supervisor não é promotor: mesmo que algum ainda esteja na tabela (não pôde ser movido), não entra aqui.
+  for (const p of await rodar('SELECT * FROM promotores ORDER BY id')) if (!ehSupervisor(p.cargo)) incluir(p);
   const vinculos = new Map();
   for (const v of await rodar('SELECT nome, agencia, promotor_id FROM vinculos_promotor')) vinculos.set(`${v.nome}|${v.agencia}`, v.promotor_id);
 
@@ -299,20 +301,6 @@ function prepararPromotores(dados) {
     return p;
   });
   return { registro, itens };
-}
-
-// Grava (ou atualiza) um supervisor pelo nome sem acento. Devolve true se for novo.
-async function gravarSupervisor(rodar, { nome, codigo = '', cargo = '', empresa = '' }) {
-  const [r] = await rodar(
-    `INSERT INTO supervisores (nome, chave, codigo, cargo, empresa) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (chave) DO UPDATE SET nome = EXCLUDED.nome,
-       codigo = CASE WHEN EXCLUDED.codigo <> '' THEN EXCLUDED.codigo ELSE supervisores.codigo END,
-       cargo = CASE WHEN EXCLUDED.cargo <> '' THEN EXCLUDED.cargo ELSE supervisores.cargo END,
-       empresa = CASE WHEN EXCLUDED.empresa <> '' THEN EXCLUDED.empresa ELSE supervisores.empresa END
-     RETURNING (xmax = 0) AS novo`,
-    [nome, normalizar(nome), codigo, cargo, empresa],
-  );
-  return r.novo;
 }
 
 async function gravarPromotores(dados, usuario) {
@@ -495,24 +483,27 @@ async function gravarVisitas(dados, usuario) {
     await guardarCopia(rodar, importacaoId, 'visitas', antigas);
     await rodar(`DELETE ${SQL_ESCOPO_VISITAS}`, parametros);
 
+    const gravadas = [];
     for (let i = 0; i < registros.length; i += LOTE) {
       const lote = registros.slice(i, i + LOTE);
-      await rodar(
+      gravadas.push(...await rodar(
         `INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita, status, supervisor, observacao, importacao_id)
          SELECT promotor_id, loja_id, mes, qtd, custo, dias, status, supervisor, observacao, $10::int
          FROM unnest($1::int[], $2::int[], $3::text[], $4::int[], $5::numeric[], $6::text[], $7::text[], $8::text[], $9::text[])
-           AS t(promotor_id, loja_id, mes, qtd, custo, dias, status, supervisor, observacao)`,
+           AS t(promotor_id, loja_id, mes, qtd, custo, dias, status, supervisor, observacao)
+         RETURNING id, supervisor`,
         [lote.map((r) => r.promotorId), lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.visitas), lote.map((r) => r.custo),
           lote.map((r) => r.dias), lote.map((r) => r.status), lote.map((r) => r.supervisor), lote.map((r) => r.observacao), importacaoId],
-      );
+      ));
     }
+    // Supervisores: divide o texto ("Jesus, Leo" = 2), acha ou cria cada um e grava os vínculos de cada atendimento.
+    const supervisao = await ligarAtendimentos(rodar, gravadas.map((v) => ({ visitaId: v.id, texto: v.supervisor })));
     if (codigosSemCadastro.size) registro.avisos['Promotor com código que não está no cadastro (sem salário para calcular o custo)'] = codigosSemCadastro.size;
     if (naoIdentificados.size) registro.avisos['Promotor não identificado (ligue à mão na tela Promotores)'] = naoIdentificados.size;
-    // Supervisor da planilha que não acha ninguém no cadastro de supervisores (nome completo ou primeiro nome único).
-    const supervisores = await rodar('SELECT id, nome FROM supervisores');
-    const semCadastro = new Set(itens.map((i) => i.supervisor).filter((nome) => nome && !acharPorNome(nome, supervisores)).map(normalizar));
-    if (semCadastro.size) registro.avisos['Supervisor da planilha que não está no cadastro de supervisores'] = semCadastro.size;
-    const resultado = montarResultado(registros, registro, { ...contagem, substituidas: antigas.length }, 'custo');
+    const resultado = montarResultado(registros, registro, {
+      ...contagem, substituidas: antigas.length,
+      vinculosSupervisor: supervisao.vinculos, supervisoresCriados: supervisao.criados, supervisoresPorPrimeiroNome: supervisao.porPrimeiroNome,
+    }, 'custo');
     await fecharImportacao(rodar, importacaoId, resultado);
     return resultado;
   });
@@ -614,7 +605,9 @@ async function desfazerImportacao(id, confirmacao = '') {
            FROM jsonb_to_recordset($1::jsonb) AS r(id int, promotor_id int, loja_id int, mes text, qtd_visitas int, custo numeric,
                 dias_visita text, status text, supervisor text, observacao text, importacao_id int)
            WHERE EXISTS (SELECT 1 FROM promotores p WHERE p.id = r.promotor_id) AND EXISTS (SELECT 1 FROM lojas l WHERE l.id = r.loja_id)
-           ON CONFLICT DO NOTHING RETURNING 1`, [JSON.stringify(copia.dados)]);
+           ON CONFLICT DO NOTHING RETURNING id, supervisor`, [JSON.stringify(copia.dados)]);
+      // Os vínculos com os supervisores voltam a partir do texto original guardado em visitas.supervisor.
+      if (imp.tipo === 'visitas') await ligarAtendimentos(rodar, restaurados.map((v) => ({ visitaId: v.id, texto: v.supervisor })));
     }
     await rodar('DELETE FROM importacoes WHERE id = $1', [id]); // a cópia vai junto (ON DELETE CASCADE)
     return { registros: apagados.length, restaurados: restaurados.length, semCopia: !imp.restauravel };

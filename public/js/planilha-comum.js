@@ -326,7 +326,25 @@
     return mesmoPrimeiro.length === 1 ? mesmoPrimeiro[0] : null;
   }
 
-  // Supervisor ("Sup.", "Sup ll", "supervisor", "Supervisora"...): não entra no custo dos promotores.
+  // Divide o texto da coluna "Supervisor": "Jesus, Leo", "Jesus/Leo", "Jesus; Leo" e "Jesus e Leo" são 2 pessoas.
+  // O " e " só divide quando o pedaço inteiro NÃO é o nome de um supervisor já conhecido ("chaves", sem acento):
+  // assim "Maria Souza e Silva", se cadastrada, continua uma pessoa só. Nomes repetidos ("Jesus, jesús") contam uma vez.
+  function separarSupervisores(texto, chaves = new Set()) {
+    const nomes = [];
+    for (const parte of textoDe(texto).split(/\s*[,;/]\s*/)) {
+      if (!parte.trim()) continue;
+      const pedacos = chaves.has(normalizar(parte)) ? [parte] : parte.split(/\s+e\s+/i);
+      for (const pedaco of pedacos) {
+        const nome = pedaco.trim();
+        if (nome && !nomes.some((n) => normalizar(n) === normalizar(nome))) nomes.push(nome);
+      }
+    }
+    return nomes;
+  }
+
+  // Cargo de supervisor: o cargo (sem acento, minúsculo) começa com "sup" seguido de espaço ou fim
+  // ("Sup", "Sup.", "Sup l", "Sup ll") ou com "supervis" ("Supervisor", "Supervisora", "Supervisão").
+  // "Suporte", "Lider", "INSS" e "Lic. Maternidade" NÃO são supervisor.
   const ehSupervisor = (cargo) => /^sup( |$)|^supervis/.test(normalizar(cargo));
 
   // Código do promotor para comparar: "06", "6" e " 6 " são o mesmo código (o Excel às vezes tira o zero).
@@ -380,6 +398,15 @@
       };
     }
 
+    // Mês da linha: o da data; sem data, o mês escolhido na tela. Com um mês escolhido na tela, a linha
+    // de outro mês fica de fora (FORA). Sem mês na tela ("todos os meses"), vale a data de cada linha.
+    const FORA = 'fora';
+    function mesDaLinha(linha) {
+      const daData = mesDe(pegar(linha, 'data'));
+      if (daData && opcoes.mes && daData !== opcoes.mes) return FORA;
+      return daData || opcoes.mes || '';
+    }
+
     function adicionarFaturamento(linha) {
       const loja = lojaDaLinha(linha);
       if (!loja) return ignorar('Sem loja (linha de total ou em branco)');
@@ -387,8 +414,9 @@
       if (!loja.cnpj) return ignorar('Sem CNPJ (o faturamento liga com as lojas pelo CNPJ)');
       const valor = numeroDe(pegar(linha, 'valor'));
       if (valor === null) return ignorar('Valor não é número');
-      const mes = mesDe(pegar(linha, 'data')) || opcoes.mes;
+      const mes = mesDaLinha(linha);
       if (!mes) return ignorar('Sem data/mês (informe o mês na tela)');
+      if (mes === FORA) return ignorar(`Fora do mês escolhido (${opcoes.mes})`);
       const empresa = textoDe(pegar(linha, 'empresa')) || empresaPadrao;
       const chave = `${loja.chave}|${mes}|${empresa.toLowerCase()}`;
       if (!somas.has(chave)) somas.set(chave, { loja, mes, empresa, valor: 0 });
@@ -413,8 +441,9 @@
     function adicionarVisita(linha) {
       const loja = lojaDaLinha(linha);
       if (!loja) return ignorar('Sem loja (linha de total ou em branco)');
-      const mes = mesDe(pegar(linha, 'data')) || opcoes.mes;
+      const mes = mesDaLinha(linha);
       if (!mes) return ignorar('Sem mês (informe o mês na tela)');
+      if (mes === FORA) return ignorar(`Fora do mês escolhido (${opcoes.mes})`);
       const promotor = promotorDaLinha(linha);
       if (!promotor) return ignorar('Sem promotor (escolha o promotor na tela)');
       const chavePromotor = promotor.id ? `id:${promotor.id}`
@@ -430,7 +459,13 @@
       const item = somas.get(chave);
       item.visitas += visitas;
       if (custo !== null) item.custo = (item.custo || 0) + custo;
-      for (const campo of ['dias', 'status', 'supervisor', 'observacao']) item[campo] = item[campo] || textoDe(pegar(linha, campo));
+      for (const campo of ['dias', 'status', 'observacao']) item[campo] = item[campo] || textoDe(pegar(linha, campo));
+      // Duas linhas do mesmo promotor, loja e mês com supervisores diferentes: guarda os dois ("Jesus, Leo").
+      const supervisor = textoDe(pegar(linha, 'supervisor'));
+      const jaTem = separarSupervisores(item.supervisor).map(normalizar);
+      if (supervisor && !separarSupervisores(supervisor).every((nome) => jaTem.includes(normalizar(nome)))) {
+        item.supervisor = item.supervisor ? `${item.supervisor}, ${supervisor}` : supervisor;
+      }
     }
 
     // Valor em dinheiro do cadastro. Algumas células vêm com texto no lugar do número ("carro", "600 + 120m"):
@@ -488,5 +523,5 @@
     };
   }
 
-  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, separarCargo, ehSupervisor, codigoNormal, acharPorNome, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
+  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, separarCargo, ehSupervisor, separarSupervisores, codigoNormal, acharPorNome, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
 });

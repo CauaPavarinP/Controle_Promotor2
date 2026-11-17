@@ -5,7 +5,7 @@
 // e a sua parte do faturamento. Qualquer total (por promotor, agência, UF, loja ou geral) é só a soma das
 // linhas — por isso as somas sempre batem entre si, e um filtro (ex.: UF = SC) pega só a parte certa.
 
-const { normalizar, cnpjValido, ufDe, ehSupervisor, acharPorNome } = require('../public/js/planilha-comum');
+const { normalizar, cnpjValido, ufDe, ehSupervisor } = require('../public/js/planilha-comum');
 
 const CAMPOS_CUSTO = ['salario', 'periculosidade', 'ajuda_celular', 'ajuda_custo', 'almoco', 'vale_transporte', 'gratificacao', 'outros_custos'];
 
@@ -50,6 +50,8 @@ function limparFiltros(filtros = {}) {
   const limpo = {};
   for (const campo of [...FILTROS_DE_PROMOTOR, ...FILTROS_DE_LOJA]) {
     const valor = String(filtros[campo] ?? '').trim().slice(0, 150);
+    // O filtro de supervisor é o id dele. Um texto (de versões antigas, guardado no navegador) é ignorado.
+    if (campo === 'supervisor' && !/^\d{1,9}$/.test(valor)) continue;
     if (valor) limpo[campo] = valor;
   }
   return limpo;
@@ -70,7 +72,8 @@ function promotorPassa(linha, filtros) {
 function linhaPassa(linha, filtros) {
   if (!promotorPassa(linha, filtros)) return false;
   if (filtros.uf && linha.uf !== ufAlvo(filtros.uf)) return false;
-  if (filtros.supervisor && normalizar(linha.supervisor) !== normalizar(filtros.supervisor)) return false;
+  // Atendimento de "Jesus, Leo" aparece no filtro do Jesus E no do Leo (um vínculo para cada).
+  if (filtros.supervisor && !linha.supervisorIds.includes(Number(filtros.supervisor))) return false;
   if (filtros.municipio && normalizar(linha.cidade) !== normalizar(filtros.municipio)) return false;
   if (filtros.mercado && !normalizar(linha.lojaNome).includes(normalizar(filtros.mercado))) return false;
   return true;
@@ -114,8 +117,11 @@ function custosDosAtendimentos(visitas, promotoresPorId) {
 //  faturamentos: [{ cnpj, mes, valor }] do ERP no período (já somando as empresas escolhidas)
 //  clientes:     [{ cnpj, nome, cidade, uf }] do ERP
 //  mesesComErp:  meses do período que têm faturamento importado (de qualquer empresa)
-//  supervisores:  cadastro de supervisores (ligam-se aos atendimentos pela coluna "Supervisor" da planilha)
-function analisar({ promotores, lojas, visitas, faturamentos, clientes = [], supervisores = [], mesesComErp, de, ate, filtros = {}, meta }) {
+//  supervisores:  cadastro de supervisores
+//  vinculos:      [{ visita_id, supervisor_id }] = quais supervisores cada atendimento tem (zero, um ou vários)
+function analisar({
+  promotores, lojas, visitas, faturamentos, clientes = [], supervisores = [], vinculos = [], mesesComErp, de, ate, filtros = {}, meta,
+}) {
   filtros = limparFiltros(filtros);
   const meses = mesesEntre(de, ate);
   const erp = new Set(mesesComErp);
@@ -123,13 +129,13 @@ function analisar({ promotores, lojas, visitas, faturamentos, clientes = [], sup
   const lojasPorId = new Map(lojas.map((l) => [l.id, l]));
   const clientesPorCnpj = new Map(clientes.map((c) => [c.cnpj, c]));
   const custos = custosDosAtendimentos(visitas, promotoresPorId);
-  // Supervisor de cada nome escrito na planilha (nome completo ou primeiro nome único; sem acento).
-  const supervisorDoNome = new Map();
-  const supervisorDe = (nome) => {
-    const chave = normalizar(nome);
-    if (!supervisorDoNome.has(chave)) supervisorDoNome.set(chave, chave ? acharPorNome(nome, supervisores) : null);
-    return supervisorDoNome.get(chave);
-  };
+  // Supervisores de cada atendimento (pelos vínculos gravados na importação).
+  const supervisoresPorId = new Map(supervisores.map((sup) => [sup.id, sup]));
+  const supervisoresDaVisita = new Map();
+  for (const v of vinculos) {
+    if (!supervisoresDaVisita.has(v.visita_id)) supervisoresDaVisita.set(v.visita_id, []);
+    supervisoresDaVisita.get(v.visita_id).push(v.supervisor_id);
+  }
   const mesesComAtendimento = new Set(visitas.map((v) => v.mes));
 
   // CNPJ válido de cada loja (CNPJ errado ou vazio = loja sem CNPJ, faturamento zero).
@@ -171,7 +177,8 @@ function analisar({ promotores, lojas, visitas, faturamentos, clientes = [], sup
       custo, origemCusto: origem, faturamento,
       cnpj, temCnpj: Boolean(cnpj), lojasDoCnpj, promotoresNaLoja,
       dias: v.dias_visita || '', supervisor: v.supervisor || '', status: v.status || '',
-      supervisorId: v.supervisor ? (supervisorDe(v.supervisor) || {}).id || null : null,
+      supervisorIds: supervisoresDaVisita.get(v.id) || [],
+      supervisorNomes: (supervisoresDaVisita.get(v.id) || []).map((id) => (supervisoresPorId.get(id) || {}).nome).filter(Boolean),
       promotorNome: promotor.nome, tipo: promotor.tipo, agencia: agenciaDe(promotor),
       codigo: promotor.codigo || '', cadastrado: Boolean(promotor.cadastrado), cargo: promotor.cargo || '', pendente: promotor.pendente || '',
       lojaNome: loja.nome, cidade: loja.cidade || '', uf: ufDe(loja.uf) || loja.uf || '',
@@ -213,7 +220,7 @@ function analisar({ promotores, lojas, visitas, faturamentos, clientes = [], sup
   }
 
   return {
-    meta, meses, filtros, linhas, todas, naoAlocado, semLoja,
+    meta, meses, filtros, linhas, todas, naoAlocado, semLoja, supervisores,
     mesesComErp: meses.filter((m) => erp.has(m)),
     mesesComAtendimento: meses.filter((m) => mesesComAtendimento.has(m)),
     faturamentoErp: arredondar(faturamentoErp),
@@ -364,12 +371,14 @@ function avisosDe(analise) {
       [...pendentes.values()].map((ls) => `${ls[0].agencia} — ${ls[0].promotorNome} (${motivo[ls[0].pendente] || ls[0].pendente}): ${new Set(ls.map((l) => l.lojaId)).size} loja(s)`)));
   }
 
-  // Nome da coluna "Supervisor" da planilha que não achou ninguém no cadastro de supervisores.
-  const supervisorSemCadastro = agrupar(linhas.filter((l) => l.supervisor && !l.supervisorId), (l) => normalizar(l.supervisor));
-  if (supervisorSemCadastro.size) {
-    avisos.push(aviso('supervisor_sem_cadastro', 'Supervisor sem cadastro',
-      `${supervisorSemCadastro.size} nome(s) da coluna "Supervisor" da planilha de atendimentos não foram encontrados no cadastro de supervisores (nem pelo nome completo, nem por um primeiro nome único). Cadastre-os na tela Supervisores.`,
-      [...supervisorSemCadastro.values()].map((ls) => `${ls[0].supervisor}: ${new Set(ls.map((l) => l.lojaId)).size} loja(s)`)));
+  // Pessoa com cargo de supervisor (ou nome igual ao de um supervisor) que ainda é promotor porque tem
+  // atendimento lançado como promotor: a migração não a moveu. Alguém precisa decidir o que ela é.
+  const chavesSupervisores = new Set((analise.supervisores || []).map((sup) => sup.chave || normalizar(sup.nome)));
+  const supervisorComoPromotor = agrupar(linhas.filter((l) => ehSupervisor(l.cargo) || chavesSupervisores.has(normalizar(l.promotorNome))), (l) => l.promotorId);
+  if (supervisorComoPromotor.size) {
+    avisos.push(aviso('supervisor_como_promotor', 'Supervisor cadastrado como promotor',
+      `${supervisorComoPromotor.size} pessoa(s) com cargo de supervisor (ou com o nome de um supervisor) estão como promotor e têm atendimentos, por isso não foram movidas para Supervisores. Confira se é mesmo supervisor; se for, apague os atendimentos dela como promotor e reinicie o sistema.`,
+      [...supervisorComoPromotor.values()].map((ls) => `${ls[0].promotorNome} (${ls[0].cargo || 'nome de supervisor'}): ${new Set(ls.map((l) => l.lojaId)).size} loja(s)`)));
   }
 
   if (semLoja.length) {

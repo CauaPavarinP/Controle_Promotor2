@@ -27,9 +27,10 @@ async function carregar(manterPagina = false) {
     document.getElementById('ficha').innerHTML = [
       item('Tipo', esc(TIPOS[p.tipo])), item('Agência', esc(p.agencia || '—')), item('Empresa / grupo', esc(p.empresa || '—')),
       item('Código', esc(p.codigo || '—')), item('Cargo', esc(p.cargo || '—')), item('Região', esc(p.regiao || '—')),
+      item('Supervisores no período', esc(detalhe.supervisores.join(', ') || 'nenhum')),
       item('Admissão', p.admissao ? esc(p.admissao.split('-').reverse().join('/')) : '—'), item('Telefone', esc(p.telefone || '—')),
       ...CAMPOS_DINHEIRO.map(([campo, rotulo]) => item(rotulo, reais(p[campo]))),
-      item('Custo fixo mensal (soma)', `${reais(p.custoFixo)}${p.supervisor ? '<span class="menor">Supervisor: não entra no custo dos promotores</span>' : ''}`), item('Observação', esc(p.observacao || '—')),
+      item('Custo fixo mensal (soma)', reais(p.custoFixo)), item('Observação', esc(p.observacao || '—')),
     ].join('');
     const informado = detalhe.lojas.some((l) => l.atendimentos.some((a) => a.origemCusto === 'planilha'));
     const naoInformado = detalhe.lojas.some((l) => l.atendimentos.some((a) => a.custo === null));

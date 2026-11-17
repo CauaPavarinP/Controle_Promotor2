@@ -21,17 +21,18 @@ const contem = (valor, busca) => normalizar(valor).includes(busca);
 
 // Busca no banco tudo o que o período tem e devolve a análise (ver calculo.analisar).
 async function carregar({ de, ate }, filtros = {}, empresa = '') {
-  const [promotores, visitas, faturamentos, mesesErp, clientes, supervisores] = await Promise.all([
+  const [promotores, visitas, faturamentos, mesesErp, clientes, supervisores, vinculos] = await Promise.all([
     consulta('SELECT * FROM promotores'),
     consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita, supervisor, status FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
     consulta("SELECT cnpj, mes, sum(valor) AS valor FROM faturamento_erp WHERE mes BETWEEN $1 AND $2 AND ($3 = '' OR empresa = $3) GROUP BY cnpj, mes", [de, ate, texto(empresa)]),
     consulta('SELECT DISTINCT mes FROM faturamento_erp WHERE mes BETWEEN $1 AND $2', [de, ate]),
     consulta('SELECT c.cnpj, c.nome, c.cidade, c.uf FROM clientes_erp c WHERE EXISTS (SELECT 1 FROM faturamento_erp f WHERE f.cnpj = c.cnpj AND f.mes BETWEEN $1 AND $2)', [de, ate]),
-    consulta('SELECT id, nome, codigo, cargo, empresa FROM supervisores ORDER BY nome'),
+    consulta('SELECT id, nome, chave, codigo, cargo, empresa FROM supervisores ORDER BY nome'),
+    consulta('SELECT vs.visita_id, vs.supervisor_id FROM visita_supervisor vs JOIN visitas v ON v.id = vs.visita_id WHERE v.mes BETWEEN $1 AND $2', [de, ate]),
   ]);
   const lojas = await consulta('SELECT id, nome, cnpj, cidade, uf FROM lojas WHERE id = ANY($1::int[])', [[...new Set(visitas.map((v) => v.loja_id))]]);
   const analise = calc.analisar({
-    promotores, lojas, visitas, faturamentos, clientes, supervisores, mesesComErp: mesesErp.map((m) => m.mes), de, ate, filtros, meta: meta(),
+    promotores, lojas, visitas, faturamentos, clientes, supervisores, vinculos, mesesComErp: mesesErp.map((m) => m.mes), de, ate, filtros, meta: meta(),
   });
   return { ...analise, supervisores, cadastro: promotores, lojasPorId: new Map(lojas.map((l) => [l.id, l])) };
 }
@@ -181,6 +182,7 @@ async function detalheDoPromotor(id, query) {
     promotor: { ...promotor, custoFixo: custoFixo(promotor), supervisor: ehSupervisor(promotor.cargo) },
     visitas: s.visitas, custo: s.custo, faturamento: s.faturamento, custoSemLoja: s.custoSemLoja,
     percentual: s.percentual, situacao: s.situacao,
+    supervisores: [...new Set(ls.flatMap((l) => l.supervisorNomes))].sort(),
     lojas: [...agrupar(ls, (l) => l.lojaId).values()].map((g) => ({
       ...resumoDaLoja(g),
       atendimentos: g.map((l) => ({
@@ -297,7 +299,7 @@ async function lojasPorUf(query) {
     const informados = Object.values(valores);
     return {
       promotorId: l.promotorId, promotor: l.promotorNome, tipo: l.tipo, agencia: l.agencia,
-      supervisor: [...new Set(g.map((x) => x.supervisor).filter(Boolean))].join(', '),
+      supervisor: [...new Set(g.flatMap((x) => x.supervisorNomes))].sort().join(', '),
       lojaId: l.lojaId, loja: l.lojaNome, cnpj: l.cnpj, cidade: l.cidade, uf: l.uf,
       visitas: s.visitas, valores, total: informados.length ? arred(informados.reduce((t, v) => t + v, 0)) : null,
       custo: s.custo, faturamento: s.faturamento, percentual: s.percentual, situacao: s.situacao,
@@ -314,28 +316,26 @@ async function lojasPorUf(query) {
 }
 
 // ---------- Supervisores ----------
-// De quem cada supervisor é supervisor no período: promotores, agências e lojas dos atendimentos em que o
-// nome dele aparece na coluna "Supervisor". Os nomes da planilha sem cadastro aparecem à parte.
+// Cada supervisor e os promotores dele no período (pelos vínculos dos atendimentos), com agência e lojas.
+// Mais: promotores sem supervisor no período e pessoas com cargo de supervisor que ainda estão como promotor.
 async function supervisoresDoPeriodo(query) {
   const a = await carregar(lerPeriodo(query), query, query.empresa);
-  const resumir = (ls) => ({
-    promotores: [...agrupar(ls, (l) => l.promotorId).values()].map((g) => ({ id: g[0].promotorId, nome: g[0].promotorNome, agencia: g[0].agencia }))
-      .sort((x, y) => x.nome.localeCompare(y.nome)),
-    agencias: [...new Set(ls.map((l) => l.agencia))].sort(),
-    lojas: [...agrupar(ls, (l) => l.lojaId).values()].map((g) => ({ id: g[0].lojaId, nome: g[0].lojaNome, cidade: g[0].cidade, uf: g[0].uf }))
-      .sort((x, y) => x.nome.localeCompare(y.nome)),
-  });
-  const porSupervisor = agrupar(a.linhas.filter((l) => l.supervisorId), (l) => l.supervisorId);
-  // Com filtro (ex.: UF), só aparece quem tem atendimento nele; sem filtro, aparece todo o cadastro.
+  const promotoresDe = (ls) => [...agrupar(ls, (l) => l.promotorId).values()].map((g) => ({
+    id: g[0].promotorId, nome: g[0].promotorNome, agencia: g[0].agencia, tipo: g[0].tipo,
+    lojas: new Set(g.map((l) => l.lojaId)).size,
+  })).sort((x, y) => x.nome.localeCompare(y.nome));
   const mostrarTodos = !calc.temAlgumFiltro(a.filtros);
-  return {
-    supervisores: a.supervisores
-      .filter((s) => mostrarTodos || porSupervisor.has(s.id))
-      .map((s) => ({ ...s, ...resumir(porSupervisor.get(s.id) || []) })),
-    semCadastro: [...agrupar(a.linhas.filter((l) => l.supervisor && !l.supervisorId), (l) => normalizar(l.supervisor)).values()]
-      .map((ls) => ({ nome: ls[0].supervisor, ...resumir(ls) })),
-    avisos: calc.avisosDe(a),
-  };
+  const supervisores = a.supervisores.map((sup) => {
+    const ls = a.linhas.filter((l) => l.supervisorIds.includes(sup.id));
+    return {
+      id: sup.id, nome: sup.nome, codigo: sup.codigo, cargo: sup.cargo, empresa: sup.empresa,
+      promotores: promotoresDe(ls), agencias: [...new Set(ls.map((l) => l.agencia))].sort(), lojas: new Set(ls.map((l) => l.lojaId)).size,
+    };
+  }).filter((sup) => mostrarTodos || sup.promotores.length);
+  // Promotor sem supervisor = nenhum atendimento dele no período tem supervisor.
+  const porPromotor = agrupar(a.linhas, (l) => l.promotorId);
+  const semSupervisor = promotoresDe([...porPromotor.values()].filter((ls) => ls.every((l) => !l.supervisorIds.length)).flat());
+  return { supervisores, semSupervisor, avisos: calc.avisosDe(a) };
 }
 
 // ---------- Agências ----------
@@ -390,6 +390,7 @@ function dinheiro(valor, rotulo) {
 function validarPromotor(dados) {
   const nome = String(dados.nome || '').trim();
   if (!nome) throw new ErroDeValidacao('Informe o nome do promotor.');
+  if (ehSupervisor(dados.cargo)) throw new ErroDeValidacao('Supervisor não é promotor: cadastre na tela Supervisores.');
   if (!['CLT', 'MEI', 'AGENCIA', 'FREELANCER'].includes(dados.tipo)) throw new ErroDeValidacao('Escolha o tipo: CLT, MEI, Agência ou Freelancer.');
   const admissao = String(dados.admissao || '').trim();
   if (admissao && !/^\d{4}-\d{2}-\d{2}$/.test(admissao)) throw new ErroDeValidacao('Data de admissão inválida.');
@@ -462,7 +463,7 @@ async function opcoes() {
     consulta("SELECT DISTINCT empresa FROM faturamento_erp WHERE empresa <> '' ORDER BY empresa"),
     consulta('SELECT DISTINCT p.agencia, p.empresa FROM promotores p'),
     consulta('SELECT DISTINCT l.nome, l.cidade, l.uf FROM lojas l WHERE EXISTS (SELECT 1 FROM visitas v WHERE v.loja_id = l.id)'),
-    consulta("SELECT DISTINCT supervisor FROM visitas WHERE supervisor <> '' ORDER BY supervisor"),
+    consulta('SELECT id, nome FROM supervisores ORDER BY nome'),
   ]);
   // Remove repetições que só diferem em maiúsculas/acentos ("SANTA HELENA" e "Santa Helena").
   const unicos = (valores) => {
@@ -481,13 +482,14 @@ async function opcoes() {
     ufs: unicos(lojas.map((l) => ufDe(l.uf) || l.uf)),
     municipios: unicos(lojas.map((l) => l.cidade)),
     mercados: unicos(lojas.map((l) => l.nome)),
-    supervisores: unicos(supervisores.map((s) => s.supervisor)),
+    supervisores, // [{ id, nome }]: o filtro usa o id
   };
 }
 
 // Listas grandes, pedidas só pela tela que precisa delas.
 const listaDeLojas = () => consulta('SELECT id, nome, cnpj, cidade FROM lojas ORDER BY nome');
-const nomesDosPromotores = () => consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome');
+const nomesDosPromotores = async () => (await consulta('SELECT id, nome, tipo, agencia, cargo FROM promotores WHERE ativo ORDER BY nome'))
+  .filter((p) => !ehSupervisor(p.cargo)).map(({ cargo, ...p }) => p); // supervisor não aparece no seletor de promotor
 
 module.exports = {
   resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, detalheDoCliente, lojasPorUf, agencias, supervisoresDoPeriodo,

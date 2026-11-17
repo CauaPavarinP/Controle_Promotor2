@@ -1,7 +1,8 @@
 // Conexão com o PostgreSQL e criação das tabelas.
 const { Pool, types } = require('pg');
 const config = require('./config');
-const { chaveDaLoja, separarCargo } = require('../public/js/planilha-comum');
+const { chaveDaLoja, separarCargo, normalizar, ehSupervisor } = require('../public/js/planilha-comum');
+const { gravarSupervisor, ligarAtendimentos } = require('./ligacaoSupervisor');
 
 // O PostgreSQL devolve números decimais (numeric) como texto. Aqui pedimos como número.
 types.setTypeParser(1700, (valor) => parseFloat(valor));
@@ -182,6 +183,25 @@ CREATE TABLE IF NOT EXISTS vinculos_promotor (
   PRIMARY KEY (nome, agencia)
 );
 
+-- Vínculo atendimento <-> supervisor (N:N). Um atendimento pode ter vários supervisores ("Jesus, Leo")
+-- ou nenhum. Apagar o atendimento ou o supervisor apaga o vínculo junto.
+CREATE TABLE IF NOT EXISTS visita_supervisor (
+  visita_id     INTEGER NOT NULL REFERENCES visitas(id) ON DELETE CASCADE,
+  supervisor_id INTEGER NOT NULL REFERENCES supervisores(id) ON DELETE CASCADE,
+  PRIMARY KEY (visita_id, supervisor_id)
+);
+CREATE INDEX IF NOT EXISTS visita_supervisor_supervisor ON visita_supervisor (supervisor_id);
+
+-- Preparado para o futuro perfil "Supervisor": o usuário que é este supervisor (ainda sem uso).
+ALTER TABLE supervisores ADD COLUMN IF NOT EXISTS usuario_id INTEGER UNIQUE REFERENCES usuarios(id) ON DELETE SET NULL;
+
+-- Cópia completa (inclusive salário) dos promotores que a migração moveu para supervisores.
+CREATE TABLE IF NOT EXISTS backup_promotores_supervisores (
+  promotor_id INTEGER NOT NULL,
+  dados       JSONB NOT NULL,
+  movido_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS importacoes_backup (
   importacao_id INTEGER NOT NULL REFERENCES importacoes(id) ON DELETE CASCADE,
   tabela        TEXT NOT NULL,
@@ -249,11 +269,54 @@ async function separarCargosDosNomes() {
   }
 }
 
+// Supervisor não é promotor. Esta migração roda ao ligar o sistema, numa transação, e pode rodar várias vezes:
+//  A) move para "supervisores" os promotores com cargo de supervisor OU com nome completo (sem acento) igual
+//     ao de um supervisor já cadastrado — nunca pelo primeiro nome. Guarda a cópia do promotor antes de apagar.
+//     Quem tem atendimento lançado como promotor NÃO é movido (apagaria os atendimentos): fica no aviso.
+//  B) transforma o texto "Supervisor" dos atendimentos já gravados em vínculos (visita_supervisor).
+// Só faz o que falta: quem já foi movido não está mais em promotores; atendimento que já tem vínculo é pulado.
+async function migrarSupervisores() {
+  return transacao(async (rodar) => {
+    const relatorio = { movidos: [], noAviso: [], vinculos: 0, atendimentos: 0, criados: [], porPrimeiroNome: [] };
+    const chaves = new Set((await rodar('SELECT chave FROM supervisores')).map((s) => s.chave));
+    const promotores = await rodar(`SELECT p.*, (SELECT count(*)::int FROM visitas v WHERE v.promotor_id = p.id) AS atendimentos
+      FROM promotores p ORDER BY p.nome`);
+    for (const p of promotores.filter((x) => ehSupervisor(x.cargo) || chaves.has(normalizar(x.nome)))) {
+      if (p.atendimentos > 0) { relatorio.noAviso.push(`${p.nome} (${p.cargo || 'sem cargo'}, ${p.atendimentos} atendimento(s))`); continue; }
+      const { atendimentos, ...dados } = p;
+      await rodar('INSERT INTO backup_promotores_supervisores (promotor_id, dados) VALUES ($1, $2::jsonb)', [p.id, JSON.stringify(dados)]);
+      await gravarSupervisor(rodar, { nome: p.nome, codigo: p.codigo, cargo: p.cargo, empresa: p.empresa || p.agencia });
+      await rodar('DELETE FROM promotores WHERE id = $1', [p.id]);
+      relatorio.movidos.push(`${p.nome} (${p.cargo || 'nome igual ao de um supervisor'})`);
+    }
+    const semVinculo = await rodar(`SELECT v.id, v.supervisor FROM visitas v
+      WHERE v.supervisor <> '' AND NOT EXISTS (SELECT 1 FROM visita_supervisor vs WHERE vs.visita_id = v.id)`);
+    if (semVinculo.length) {
+      const r = await ligarAtendimentos(rodar, semVinculo.map((v) => ({ visitaId: v.id, texto: v.supervisor })));
+      Object.assign(relatorio, { vinculos: r.vinculos, atendimentos: r.atendimentos, criados: r.criados, porPrimeiroNome: r.porPrimeiroNome });
+    }
+    return relatorio;
+  });
+}
+
+// Mostra no log do servidor o que a migração de supervisores fez (só quando fez alguma coisa).
+function registrarMigracao(r) {
+  const linha = (texto) => console.log(`[migração de supervisores] ${texto}`);
+  if (r.movidos.length) linha(`${r.movidos.length} promotor(es) movido(s) para Supervisores: ${r.movidos.join('; ')}`);
+  if (r.noAviso.length) linha(`NÃO movidos (têm atendimento como promotor; ficam no aviso): ${r.noAviso.join('; ')}`);
+  if (r.vinculos) linha(`${r.vinculos} vínculo(s) criado(s) em ${r.atendimentos} atendimento(s).`);
+  if (r.criados.length) linha(`Supervisores criados a partir da planilha: ${r.criados.join(', ')}`);
+  if (r.porPrimeiroNome.length) linha(`Ligados pelo primeiro nome: ${r.porPrimeiroNome.join('; ')}`);
+}
+
 async function iniciarBanco() {
   await consulta(TABELAS);
   await consulta(ATUALIZACOES);
   await migrarFaturamentoPorCnpj();
   await separarCargosDosNomes();
+  const relatorio = await migrarSupervisores();
+  registrarMigracao(relatorio);
+  return { supervisores: relatorio };
 }
 
 async function fecharBanco() {
@@ -261,4 +324,4 @@ async function fecharBanco() {
   pool = null;
 }
 
-module.exports = { consulta, transacao, iniciarBanco, fecharBanco };
+module.exports = { consulta, transacao, iniciarBanco, fecharBanco, migrarSupervisores };

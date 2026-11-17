@@ -9,7 +9,7 @@ Sistema web para saber se cada promotor **"se paga"**: o custo dele precisa ser 
 | Login | `/login` | Entrada com login e senha |
 | Resumo | `/resumo` | Cards do período: faturamento total, custo total dos promotores, % do custo sobre o faturamento e promotores dentro/fora da meta |
 | Lojas por UF | `/lojas-uf` | Botões por UF e tabela das lojas atendidas (supervisor, agência, promotor, CNPJ, loja, cidade, UF, visitas, valor de cada mês, total, custo, faturamento, % e situação). Ordena por coluna, oculta agências sem custo, exporta Excel e imprime |
-| Supervisores | `/supervisores` | Cadastro de supervisores (nome e código) e de quem cada um é supervisor no período: promotores, agências e lojas. Lista os nomes da planilha sem cadastro (com botão Cadastrar). O suporte vê os promotores com cargo de supervisor e pode movê-los para cá |
+| Supervisores | `/supervisores` | Cada supervisor e os promotores dele no período (com agência e lojas), mais os promotores sem supervisor. Botões Novo, Editar (nome e código), **Juntar** (dois cadastros que são a mesma pessoa, ex.: "Leo" e "Leonardo Silva": os vínculos passam para um e o outro é apagado, sem desfazer) e Excluir |
 | Agências | `/agencias` | Se cada agência vale o que custa: cartões (faturamento, custo, % contra o limite) e tabela por agência que abre os promotores e, no promotor, as lojas. Exporta Excel (3 abas) |
 | Faturamento | `/faturamento` | Faturamento de cada loja com filtros (período, busca, empresa, situação), custo dos promotores na loja e exportação para Excel |
 | Ficha da loja | `/loja?id=...` ou `/loja?cnpj=...` | Abre ao clicar numa linha do Faturamento. Loja atendida: faturamento do CNPJ e a parte da loja mês a mês, outras lojas do mesmo CNPJ, custo, % e promotores. Cliente do ERP sem atendimento: o faturamento do CNPJ mês a mês |
@@ -57,8 +57,9 @@ Pode haver diferença de centavos entre um total e a soma das linhas, por arredo
 - O .xls binário do Excel antigo não é aceito (salve como .xlsx ou .csv).
 - **Cargo no nome:** no cadastro, "NOME - Sup ll" vira nome "NOME" e cargo "Sup ll" (coluna `cargo`). Só separa quando o fim parece um cargo (curto, sem números nem parênteses), para não cortar nomes de agência como "101 do Brasil - Filial PR (CLT)". Os nomes que já estavam no banco são limpos ao iniciar.
 - **Supervisor não é promotor.** No cadastro, quem tem cargo de supervisor ("Sup", "Sup.", "Sup l", "Sup ll", "Supervisor"...) vai para o cadastro de **supervisores** (nome, código, cargo e empresa), sem salário, custo, tipo ou situação, e não aparece em Promotores nem nos totais. "Lider", "INSS" e "Lic. Maternidade" continuam promotores, com o cargo anotado.
-- **Supervisores que já estavam em promotores** (importados antes desta regra): a tela Supervisores mostra a lista ao suporte, que marca e confirma a mudança. Quem tem atendimento lançado como promotor não é movido.
-- **Supervisor nos atendimentos:** é ligado pela coluna "Supervisor" da planilha, comparando sem acento e sem diferenciar maiúsculas: primeiro o nome completo; se não achar, o primeiro nome, **só se houver um único supervisor com ele** (a planilha costuma trazer só "Jesus"). Nome que não acha ninguém aparece no aviso "Supervisor sem cadastro" e na tela Supervisores. O filtro "Supervisor" das telas usa o nome escrito na planilha.
+- **Supervisor nos atendimentos (vínculo N:N):** a coluna "Supervisor" é separada em pessoas por vírgula, ";", "/" e " e " ("Jesus, Leo" = 2 supervisores; um nome do cadastro que contém " e " não é cortado). Cada nome é procurado sem acento e sem diferenciar maiúsculas: nome completo; senão o primeiro nome, **só se houver um único supervisor com ele**; senão o supervisor é **criado**. Cada atendimento ganha um vínculo com cada supervisor (tabela `visita_supervisor`). Um promotor pode ter vários supervisores ou nenhum. O texto original continua guardado em `visitas.supervisor`. A mensagem final da importação mostra os vínculos, os supervisores criados e os ligados pelo primeiro nome (ex.: "Jesus → JESUS ANGELS ZAPATA RIVAS"), para conferir.
+- O filtro "Supervisor" das telas usa o cadastro de supervisores (pelo id) e mostra os atendimentos vinculados a ele.
+- **Migração automática dos supervisores** (ao iniciar, numa transação, sem repetir): (A) promotores com cargo de supervisor ou com o **nome completo** igual a um supervisor (nunca pelo primeiro nome) e **sem nenhum atendimento** saem de promotores e vão para supervisores; os dados antigos, inclusive o salário, ficam em `backup_promotores_supervisores`. Quem tem atendimento fica no aviso "Supervisor cadastrado como promotor", para resolver à mão. (B) os atendimentos que têm texto de supervisor e nenhum vínculo ganham os vínculos. O resultado sai no log do Render, nas linhas "[migração de supervisores]".
 - No relatório de faturamento do Focco, as colunas usadas são `CNPJ CPF`, `CLIENTE`, `DT EMIS`, `VLR TOTAL`, `COD EMP`, `CIDADE` e `UF`. Cada linha é um item de nota; o sistema soma tudo por cliente e mês.
 - O sistema reconhece as colunas pelo nome do cabeçalho e mostra para conferir. Dá para corrigir na tela.
 - Em planilhas com várias abas, ele escolhe sozinho a aba com mais colunas reconhecidas para o tipo escolhido.
@@ -66,6 +67,7 @@ Pode haver diferença de centavos entre um total e a soma das linhas, por arredo
   - **Faturamento:** antes de gravar, apaga todo o faturamento dos **meses e empresas** que o arquivo traz. Por isso, exporte do Focco sempre o **mês inteiro** de cada empresa.
   - **Atendimentos:** apaga todos os atendimentos dos **meses** do arquivo feitos pelas **agências** do arquivo (e pelos promotores dele), inclusive os lançados à mão na tela. É por agência, e não o mês de todo mundo, porque cada agência manda o próprio arquivo: importar o arquivo da agência A não apaga o que veio da agência B. A agência é a do texto do arquivo (coluna "Agência ou MEI"); um CLT achado pelo código entra só ele, sem levar junto a agência que tem no cadastro. **Linha sem agência** (ex.: MEI) apaga só os atendimentos dos promotores daquele arquivo, nunca o grupo "Sem agência" inteiro.
   - **Cadastro de promotores:** atualiza quem já existe e cria quem não existe. Ninguém é apagado.
+- **Meses a importar:** com coluna de data no arquivo, a opção padrão é **Todos os meses do arquivo** (cada linha vai para o mês da sua data). Escolhendo um mês, só as linhas daquele mês entram (as sem data também); as outras aparecem como "Fora do mês escolhido". Sem coluna de data, é obrigatório escolher o mês, e todas as linhas vão para ele.
 - **Antes de gravar**, a tela mostra o que vai ser substituído, por exemplo: "Isto vai substituir todo o mês out/2026 da empresa 60 (1.533 registros atuais)". Só grava se a pessoa confirmar.
 - Linhas de total ou em branco são ignoradas e aparecem contadas no aviso final, junto com o que precisa ser conferido.
 
@@ -100,11 +102,13 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 |--------|--------------|
 | `faturamento_erp` | Faturamento do ERP por CNPJ + mês + empresa |
 | `importacoes_backup` | Cópia das linhas que cada importação substituiu (para o Desfazer restaurar) |
-| `supervisores` | Supervisores: nome, código, cargo e empresa. `chave` = nome sem acento e minúsculo |
+| `supervisores` | Supervisores: nome, código, cargo e empresa. `chave` = nome sem acento e minúsculo. `usuario_id` (opcional, ainda sem uso) prepara o futuro perfil "Supervisor" |
+| `visita_supervisor` | Vínculo N:N atendimento ↔ supervisor |
+| `backup_promotores_supervisores` | Cópia dos promotores que a migração moveu para supervisores |
 | `vinculos_promotor` | Ligações feitas à mão: nome do promotor na planilha + agência → promotor do cadastro |
 | `clientes_erp` | Nome, cidade e UF de cada CNPJ do ERP |
 | `lojas` | Lojas atendidas. Identificadas pela `chave` (CNPJ + nome + cidade): lojas da mesma rede podem ter o mesmo CNPJ |
-| `visitas` | Atendimentos: promotor + loja + mês, visitas, valor, dias, status, supervisor |
+| `visitas` | Atendimentos: promotor + loja + mês, visitas, valor, dias, status e o texto original da coluna Supervisor |
 | `promotores` | Cadastro. `cargo` separado do nome; `cadastrado` = veio do cadastro (planilha ou tela), e não só dos atendimentos; `pendente` = não identificado com certeza (`ambiguo` ou `nao_encontrado`) |
 | `importacoes`, `usuarios` | Histórico de importações (`restauravel` = guardou cópia) e usuários |
 
@@ -152,7 +156,8 @@ Cada item do menu é uma página separada. Para a página nova não nascer vazia
 | `public/js/planilha-comum.js` | Lê o arquivo aos poucos, reconhece as colunas e soma as linhas. Roda no navegador **e** no servidor |
 | `src/planilha.js` | Converte .xlsx em linhas e monta os arquivos de exportação |
 | `src/importar.js` | Confere os dados recebidos e grava faturamento e visitas |
-| `src/supervisores.js` | Supervisores (cadastro, mover dos promotores) e promotores não identificados (ligar à mão) |
+| `src/supervisores.js` | Supervisores (cadastro, editar, juntar) e promotores não identificados (ligar à mão) |
+| `src/ligacaoSupervisor.js` | Procura ou cria os supervisores de um texto e grava os vínculos dos atendimentos |
 | `scripts/backup.js`, `scripts/restaurar.js` | `npm run backup` e `npm run restaurar` (pg_dump / pg_restore) |
 | `src/app.js` | Rotas da API |
 | `public/` | Telas (um `.html` e um `.js` por tela; `comum.js` é compartilhado) |

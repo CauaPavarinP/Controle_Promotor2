@@ -23,7 +23,7 @@ function abrirFormPromotor(promotor, aoSalvar) {
           <div class="campo"><label for="p-agencia">Agência (se houver)</label><input id="p-agencia" maxlength="120"></div>
           <div class="campo"><label for="p-codigo">Código / matrícula</label><input id="p-codigo" maxlength="30"></div>
           <div class="campo"><label for="p-cargo">Cargo</label><input id="p-cargo" maxlength="60" placeholder="Ex.: Promotor, Lider, Sup ll">
-            <p class="ajuda">Supervisor não entra no custo dos promotores.</p></div>
+            <p class="ajuda">Supervisor não é promotor: cadastre na tela Supervisores.</p></div>
           <div class="campo"><label for="p-empresa">Empresa / grupo</label><input id="p-empresa" maxlength="120"></div>
           <div class="campo"><label for="p-regiao">Região</label><input id="p-regiao" maxlength="120"></div>
           <div class="campo"><label for="p-admissao">Admissão</label><input id="p-admissao" type="date"></div>
