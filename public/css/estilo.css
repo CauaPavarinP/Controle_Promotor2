@@ -267,3 +267,9 @@ button.link:focus-visible { outline: 2px solid var(--principal); outline-offset:
 .marca { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 1.5; cursor: help; white-space: nowrap; }
 .marca-pendencia { background: var(--amarelo-fundo); color: var(--amarelo); border: 1px solid #efd58f; }
 .marca-verificar { background: #eef1f6; color: #3d4f63; border: 1px dashed #9fb0c3; }
+/* Promotores sem supervisor: tabela compacta agrupada por agência */
+.tabela-sem td, .tabela-sem th { padding: 6px 10px; font-size: 14px; }
+.tabela-sem tr.grupo-linha th { background: var(--cinza-fundo); color: var(--texto); font-size: 13.5px; padding: 7px 10px; }
+.tabela-sem tr.grupo-linha button.abrir { color: var(--texto); }
+.tabela-sem td:first-child { padding-left: 30px; }
+.tabela-sem .marca { margin-left: 6px; }

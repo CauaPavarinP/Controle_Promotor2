@@ -128,7 +128,6 @@ function alternarMenu(botao) {
   if (abrir) lista.querySelector('[role="menuitem"]').focus();
 }
 
-const promotorHtml = (p) => `<a href="/promotor?id=${p.id}">${esc(p.nome)}</a> <span class="menor-inline">${esc(p.agencia)} · ${p.lojas} loja(s)</span>`;
 
 // Filtros desta tela (só no navegador): busca por nome ou código, agência e "só pendências".
 const filtroTela = { busca: '', agencia: '', soPendencias: false };
@@ -195,10 +194,51 @@ function desenharTabela() {
     || `<tr><td colspan="6" class="vazio">${dados.supervisores.length ? 'Nenhum supervisor com essa busca ou filtro.' : 'Nenhum supervisor com promotor nestes filtros.'}</td></tr>`;
 }
 
+// ---------- Promotores sem supervisor: tabela agrupada por agência, com busca ----------
+const gruposFechados = new Set();
+let buscaSem = '';
+
+// Mesmo nome (sem acento) em agências diferentes, entre todos os promotores da tela. São cadastros diferentes:
+// pode ser a mesma pessoa, então só avisa.
+function agenciasPorNome() {
+  const mapa = new Map();
+  const todos = [...dados.semSupervisor, ...dados.supervisores.flatMap((s) => s.promotores)];
+  for (const p of todos) {
+    const chave = comparavel(p.nome);
+    if (!mapa.has(chave)) mapa.set(chave, new Set());
+    mapa.get(chave).add(p.agencia);
+  }
+  return mapa;
+}
+
 function desenharSemSupervisor() {
-  const lista = dados.semSupervisor.filter((p) => !filtroTela.agencia || p.agencia === filtroTela.agencia);
   el('painel-sem-supervisor').hidden = !dados.semSupervisor.length;
-  el('sem-supervisor').innerHTML = lista.map((p) => `<li>${promotorHtml(p)}</li>`).join('') || '<li class="vazio">Nenhum nesta agência.</li>';
+  const busca = comparavel(buscaSem);
+  const lista = dados.semSupervisor
+    .filter((p) => !filtroTela.agencia || p.agencia === filtroTela.agencia)
+    .filter((p) => !busca || comparavel(`${p.nome} ${p.agencia}`).includes(busca));
+  const repetidos = agenciasPorNome();
+  const grupos = new Map();
+  for (const p of lista) {
+    if (!grupos.has(p.agencia)) grupos.set(p.agencia, []);
+    grupos.get(p.agencia).push(p);
+  }
+  const ordenados = [...grupos.entries()].sort((a, b) => a[0].localeCompare(b[0], 'pt-BR'));
+  el('contagem-sem').textContent = lista.length === dados.semSupervisor.length
+    ? `${plural(lista.length, 'promotor', 'promotores')} em ${plural(ordenados.length, 'agência', 'agências')}`
+    : `Mostrando ${lista.length} de ${plural(dados.semSupervisor.length, 'promotor', 'promotores')}`;
+  el('alternar-grupos').textContent = ordenados.every(([a]) => gruposFechados.has(a)) ? 'Abrir todos' : 'Recolher todos';
+  el('sem-supervisor').innerHTML = ordenados.map(([agencia, promotores]) => {
+    const aberto = busca || !gruposFechados.has(agencia); // com busca, mostra tudo o que achou
+    return `<tr class="grupo-linha"><th colspan="3">
+        <button type="button" class="abrir" data-grupo="${esc(agencia)}" aria-expanded="${Boolean(aberto)}"><span class="seta" aria-hidden="true">${aberto ? '▾' : '▸'}</span>${esc(agencia)}
+          <span class="menor-inline">· ${plural(promotores.length, 'promotor', 'promotores')}</span></button></th></tr>
+      ${aberto ? promotores.map((p) => {
+    const outras = [...(repetidos.get(comparavel(p.nome)) || [])].filter((a) => a !== p.agencia);
+    const aviso = outras.length ? `<span class="marca marca-verificar" title="O mesmo nome aparece em: ${esc(outras.join(', '))}. Podem ser cadastros diferentes da mesma pessoa.">Nome repetido em outra agência</span>` : '';
+    return `<tr data-promotor="${p.id}"><td><a href="/promotor?id=${p.id}">${esc(p.nome)}</a> ${aviso}</td><td>${esc(TIPOS[p.tipo] || p.tipo || '—')}</td><td class="num">${p.lojas}</td></tr>`;
+  }).join('') : ''}`;
+  }).join('') || '<tr><td colspan="3" class="vazio">Nenhum promotor com essa busca ou agência.</td></tr>';
 }
 
 const supervisor = (id) => dados.supervisores.find((s) => s.id === Number(id));
@@ -302,6 +342,20 @@ function abrirFormulario(s) {
     if (evento.key !== 'Escape') return;
     const aberto = document.querySelector('.botao-mais[aria-expanded="true"]');
     if (aberto) { fecharMenus(); aberto.focus(); }
+  });
+
+  el('f-busca-sem').addEventListener('input', comAtraso(() => { buscaSem = el('f-busca-sem').value; desenharSemSupervisor(); }, 150));
+  el('sem-supervisor').addEventListener('click', (evento) => {
+    const grupo = evento.target.closest('button[data-grupo]');
+    if (!grupo || buscaSem) return;
+    if (gruposFechados.has(grupo.dataset.grupo)) gruposFechados.delete(grupo.dataset.grupo); else gruposFechados.add(grupo.dataset.grupo);
+    desenharSemSupervisor();
+  });
+  el('alternar-grupos').addEventListener('click', () => {
+    const agencias = [...new Set(dados.semSupervisor.map((p) => p.agencia))];
+    const fecharTodos = agencias.some((a) => !gruposFechados.has(a));
+    for (const a of agencias) { if (fecharTodos) gruposFechados.add(a); else gruposFechados.delete(a); }
+    desenharSemSupervisor();
   });
 
   el('excluir-cancelar').addEventListener('click', () => el('janela-excluir').close());

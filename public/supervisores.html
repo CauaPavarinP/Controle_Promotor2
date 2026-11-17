@@ -43,7 +43,15 @@
       <div class="painel" id="painel-sem-supervisor" hidden>
         <h2>Promotores sem supervisor no período</h2>
         <p class="ajuda">Nenhum atendimento destes promotores no período tem supervisor na planilha. É comum em agência terceirizada.</p>
-        <ul class="grade-nomes" id="sem-supervisor"></ul>
+        <div class="barra-tabela">
+          <div class="campo largo"><label for="f-busca-sem">Buscar promotor</label><input id="f-busca-sem" type="search" placeholder="Nome ou agência" autocomplete="off"></div>
+          <button type="button" class="secundario pequeno" id="alternar-grupos">Recolher todos</button>
+          <span class="contagem" id="contagem-sem" aria-live="polite"></span>
+        </div>
+        <table class="tabela-sem">
+          <thead><tr><th>Promotor</th><th>Tipo</th><th class="num">Lojas no período</th></tr></thead>
+          <tbody id="sem-supervisor"></tbody>
+        </table>
       </div>
       <dialog id="janela-supervisor">
         <form method="dialog">
