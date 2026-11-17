@@ -62,6 +62,14 @@
           </table>
         </div>
       </div>
+      <dialog id="janela-previa" aria-labelledby="previa-titulo">
+        <form method="dialog">
+          <h2 id="previa-titulo">Confirmar a importação</h2>
+          <div id="previa-texto" class="aviso-dados"></div>
+          <p class="ajuda" id="previa-ajuda">Uma cópia do que existe hoje fica guardada: dá para desfazer depois em "Últimas importações" (só a importação mais recente de cada mês).</p>
+          <div class="botoes"><button type="button" class="secundario" id="previa-cancelar">Cancelar</button><button type="submit" id="previa-ok">Substituir e importar</button></div>
+        </form>
+      </dialog>
     </main>
   </div>
   <script src="/js/comum.js"></script>

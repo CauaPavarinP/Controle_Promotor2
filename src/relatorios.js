@@ -3,7 +3,7 @@
 const config = require('./config');
 const { consulta } = require('./db');
 const calc = require('./calculo');
-const { mesValido, normalizar, cnpjValido, ufDe } = require('./planilha');
+const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
 
 const { CAMPOS_CUSTO, custoFixo, agenciaDe, somar, agrupar } = calc;
@@ -142,6 +142,7 @@ async function listaDePromotores(query) {
       const s = somarPromotor(ls, semLojaPor.get(p.id));
       return {
         id: p.id, nome: p.nome, tipo: p.tipo, agencia: agenciaDe(p), empresa: p.empresa, codigo: p.codigo, ativo: p.ativo,
+        cargo: p.cargo, supervisor: ehSupervisor(p.cargo), cadastrado: p.cadastrado,
         qtdLojas: new Set(ls.map((l) => l.lojaId)).size,
         visitas: s.visitas, custo: s.custo, custoSemLoja: s.custoSemLoja, faturamento: s.faturamento,
         percentual: s.percentual, situacao: s.situacao,
@@ -175,7 +176,7 @@ async function detalheDoPromotor(id, query) {
   const s = somarPromotor(ls, a.semLoja.filter((x) => x.promotorId === id));
   return {
     meta: meta(),
-    promotor: { ...promotor, agencia: promotor.agencia, custoFixo: custoFixo(promotor) },
+    promotor: { ...promotor, custoFixo: custoFixo(promotor), supervisor: ehSupervisor(promotor.cargo) },
     visitas: s.visitas, custo: s.custo, faturamento: s.faturamento, custoSemLoja: s.custoSemLoja,
     percentual: s.percentual, situacao: s.situacao,
     lojas: [...agrupar(ls, (l) => l.lojaId).values()].map((g) => ({
@@ -370,6 +371,7 @@ function validarPromotor(dados) {
     tipo: dados.tipo,
     agencia: String(dados.agencia || '').trim(),
     codigo: String(dados.codigo || '').trim(),
+    cargo: String(dados.cargo || '').trim().slice(0, 60),
     empresa: String(dados.empresa || '').trim(),
     regiao: String(dados.regiao || '').trim(),
     admissao,
@@ -381,7 +383,7 @@ function validarPromotor(dados) {
   return limpo;
 }
 
-const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
+const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'cargo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
 
 async function salvarPromotor(id, dados) {
   const p = validarPromotor(dados);
@@ -393,12 +395,13 @@ async function salvarPromotor(id, dados) {
   const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
   if (id) {
     const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
-    const linhas = await consulta(`UPDATE promotores SET ${atribuicoes} WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
+    // Salvo pela tela = cadastrado (passa a valer como cadastro, inclusive para o aviso de código sem cadastro).
+    const linhas = await consulta(`UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
     if (!linhas.length) throw new ErroDeValidacao('Promotor não encontrado.');
     return id;
   }
   const marcadores = COLUNAS_PROMOTOR.map((_, i) => `$${i + 1}`).join(', ');
-  const [criado] = await consulta(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}) VALUES (${marcadores}) RETURNING id`, valores);
+  const [criado] = await consulta(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}, cadastrado) VALUES (${marcadores}, TRUE) RETURNING id`, valores);
   return criado.id;
 }
 

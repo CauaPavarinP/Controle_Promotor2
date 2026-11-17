@@ -54,10 +54,16 @@ Pode haver diferença de centavos entre um total e a soma das linhas, por arredo
 - **Arquivos grandes (150 MB ou mais) funcionam.** Quem lê o arquivo é o navegador, aos poucos: ele soma as linhas por loja e mês e envia ao servidor só o resultado. O arquivo inteiro nunca é enviado, então não há limite de tamanho para .xls do Focco e .csv.
 - A exceção é o **.xlsx**, que o navegador não sabe abrir: ele vai para o servidor converter, com limite de 25 MB. Se passar disso, salve como .csv.
 - O .xls binário do Excel antigo não é aceito (salve como .xlsx ou .csv).
+- **Cargo no nome:** no cadastro, "NOME - Sup ll" vira nome "NOME" e cargo "Sup ll" (coluna `cargo`). Só separa quando o fim parece um cargo (curto, sem números nem parênteses), para não cortar nomes de agência como "101 do Brasil - Filial PR (CLT)". Os nomes que já estavam no banco são limpos ao iniciar.
+- **Supervisor** (cargo "Sup.", "Sup ll", "supervisor"...) não entra no custo dos promotores nem no aviso "Promotores sem loja lançada". "Lider", "INSS" e "Lic. Maternidade" ficam como cargo, mas contam no custo.
 - No relatório de faturamento do Focco, as colunas usadas são `CNPJ CPF`, `CLIENTE`, `DT EMIS`, `VLR TOTAL`, `COD EMP`, `CIDADE` e `UF`. Cada linha é um item de nota; o sistema soma tudo por cliente e mês.
 - O sistema reconhece as colunas pelo nome do cabeçalho e mostra para conferir. Dá para corrigir na tela.
 - Em planilhas com várias abas, ele escolhe sozinho a aba com mais colunas reconhecidas para o tipo escolhido.
-- **Importar de novo substitui**, não soma: faturamento por loja + mês + empresa; atendimentos por promotor + loja + mês. Por isso, exporte do Focco sempre o **mês inteiro**.
+- **Importar substitui o mês inteiro** (não soma, e o que saiu do arquivo some):
+  - **Faturamento:** antes de gravar, apaga todo o faturamento dos **meses e empresas** que o arquivo traz. Por isso, exporte do Focco sempre o **mês inteiro** de cada empresa.
+  - **Atendimentos:** apaga todos os atendimentos dos **meses** do arquivo feitos pelas **agências** do arquivo (e pelos promotores dele), inclusive os lançados à mão na tela. É por agência, e não o mês de todo mundo, porque cada agência manda o próprio arquivo: importar o arquivo da agência A não apaga o que veio da agência B. A agência é a do texto do arquivo (coluna "Agência ou MEI"); um CLT achado pelo código entra só ele, sem levar junto a agência que tem no cadastro.
+  - **Cadastro de promotores:** atualiza quem já existe e cria quem não existe. Ninguém é apagado.
+- **Antes de gravar**, a tela mostra o que vai ser substituído, por exemplo: "Isto vai substituir todo o mês out/2026 da empresa 60 (1.533 registros atuais)". Só grava se a pessoa confirmar.
 - Linhas de total ou em branco são ignoradas e aparecem contadas no aviso final, junto com o que precisa ser conferido.
 
 ### Os três tipos de importação
@@ -74,7 +80,8 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 
 - **Loja:** pelo **CNPJ**. É ele que liga a planilha de atendimentos ao faturamento do Focco. Loja sem CNPJ é identificada pelo nome + cidade e **não liga com o faturamento** (fica como *Sem faturamento*).
 - **CNPJ errado** (dígito verificador não confere, ou não tem 14 dígitos): a loja entra **sem CNPJ** e a importação avisa quantas são.
-- **Promotor:** pelo **código + primeiro nome** (a planilha de atendimentos traz só o primeiro nome; o cadastro, o nome completo). Sem código, pelo **nome + agência**: dois "João" de agências diferentes são pessoas diferentes.
+- **Promotor:** pelo **código + primeiro nome** (a planilha de atendimentos traz só o primeiro nome; o cadastro, o nome completo). O código é comparado sem zeros à esquerda: "06" e "6" são o mesmo. Sem código, pelo **nome + agência**: dois "João" de agências diferentes são pessoas diferentes.
+- **Código sem cadastro:** quando um atendimento traz código de promotor e ninguém do cadastro tem esse código + primeiro nome, a importação avisa e as telas mostram o aviso "Código de promotor sem cadastro" com a lista. Sem cadastro não há salário, então o custo de CLT fica "não informado".
 - **Linha sem nome de promotor:** o "promotor" passa a ser a própria agência da linha.
 - **Texto no lugar de valor no cadastro** (ex.: "carro", "600 + 120m"): o sistema usa o primeiro número que aparecer (ou zero) e guarda o texto original na observação do promotor, para conferir.
 
@@ -83,10 +90,12 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 | Tabela | O que guarda |
 |--------|--------------|
 | `faturamento_erp` | Faturamento do ERP por CNPJ + mês + empresa |
+| `importacoes_backup` | Cópia das linhas que cada importação substituiu (para o Desfazer restaurar) |
 | `clientes_erp` | Nome, cidade e UF de cada CNPJ do ERP |
 | `lojas` | Lojas atendidas. Identificadas pela `chave` (CNPJ + nome + cidade): lojas da mesma rede podem ter o mesmo CNPJ |
 | `visitas` | Atendimentos: promotor + loja + mês, visitas, valor, dias, status, supervisor |
-| `promotores`, `importacoes`, `usuarios` | Cadastro, histórico de importações e usuários |
+| `promotores` | Cadastro. `cargo` separado do nome; `cadastrado` = veio do cadastro (planilha ou tela), e não só dos atendimentos |
+| `importacoes`, `usuarios` | Histórico de importações (`restauravel` = guardou cópia) e usuários |
 
 **Migração automática:** nas versões anteriores o faturamento ficava por loja (tabela `faturamento`). Ao iniciar, o sistema converte esses dados para `faturamento_erp` uma única vez, numa transação (se algo falhar, nada muda), e guarda uma cópia do formato antigo em `backup_faturamento_por_loja`. Lojas que só existiam por causa do faturamento (sem nenhum atendimento) viram clientes do ERP. Depois de conferir que está tudo certo, a tabela de cópia pode ser apagada.
 
@@ -107,9 +116,13 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 
 ## Desfazer e excluir
 
-- **Importar → Desfazer:** apaga o faturamento ou os atendimentos que vieram daquele arquivo. O que uma importação mais nova substituiu continua. Lojas e promotores cadastrados continuam.
+- **Importar → Desfazer** apaga o que a importação gravou e **restaura o que ela tinha substituído**, numa transação só. Antes de substituir um mês, a importação guarda uma cópia das linhas antigas na tabela `importacoes_backup` (`importacao_id`, `tabela`, `dados` em JSON).
+- Só a **importação mais recente de cada mês e tipo** pode ser desfeita (as outras mostram "há uma mais nova"). Para voltar mais, desfaça uma por vez, da mais nova para a mais antiga.
+- A importação do **cadastro de promotores não pode ser desfeita** (o botão não aparece). Corrija o promotor na tela ou importe o cadastro de novo.
+- Importações feitas **antes desta versão** não guardaram cópia: o Desfazer delas só apaga, e avisa que o anterior não volta.
+- Lojas, clientes do ERP e promotores cadastrados por uma importação continuam no sistema depois do Desfazer.
 - **Ficha do promotor → Excluir promotor:** apaga o promotor e todos os atendimentos dele.
-- O "Total" de cada linha em *Últimas importações* é o valor daquele arquivo. Como reimportar substitui, a soma dessa lista não é o total que está no sistema.
+- O "Total" de cada linha em *Últimas importações* é o valor daquele arquivo, não o total que está no sistema.
 
 ## Por que as telas não "piscam" ao trocar
 

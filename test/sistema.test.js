@@ -13,7 +13,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   const { criarApp } = require('../src/app');
   const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
 
-  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja,
+  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup,
     importacoes, promotores, lojas, usuarios CASCADE`);
 
   // Migração: um banco no formato antigo (faturamento por loja, CNPJ único na loja) tem que virar o novo
@@ -22,7 +22,12 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   await consulta(`
     CREATE TABLE lojas (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, cnpj TEXT UNIQUE, cidade TEXT NOT NULL DEFAULT '',
       uf TEXT NOT NULL DEFAULT '', endereco TEXT NOT NULL DEFAULT '', criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
-    CREATE TABLE promotores (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, tipo TEXT NOT NULL, agencia TEXT NOT NULL DEFAULT '');
+    CREATE TABLE promotores (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, tipo TEXT NOT NULL CHECK (tipo IN ('CLT', 'MEI', 'AGENCIA')),
+      agencia TEXT NOT NULL DEFAULT '', telefone TEXT NOT NULL DEFAULT '', salario NUMERIC(12,2) NOT NULL DEFAULT 0,
+      periculosidade NUMERIC(12,2) NOT NULL DEFAULT 0, ajuda_custo NUMERIC(12,2) NOT NULL DEFAULT 0, almoco NUMERIC(12,2) NOT NULL DEFAULT 0,
+      vale_transporte NUMERIC(12,2) NOT NULL DEFAULT 0, outros_custos NUMERIC(12,2) NOT NULL DEFAULT 0, observacao TEXT NOT NULL DEFAULT '',
+      ativo BOOLEAN NOT NULL DEFAULT TRUE, criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX promotores_nome_unico ON promotores (lower(nome));
     CREATE TABLE importacoes (id SERIAL PRIMARY KEY, tipo TEXT NOT NULL);
     CREATE TABLE faturamento (id SERIAL PRIMARY KEY, loja_id INTEGER NOT NULL REFERENCES lojas(id) ON DELETE CASCADE, mes TEXT NOT NULL,
       empresa TEXT NOT NULL DEFAULT '', valor NUMERIC(14,2) NOT NULL, importacao_id INTEGER REFERENCES importacoes(id), UNIQUE (loja_id, mes, empresa));
@@ -31,7 +36,8 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       custo NUMERIC(12,2), importacao_id INTEGER REFERENCES importacoes(id), UNIQUE (promotor_id, loja_id, mes));
     INSERT INTO lojas (nome, cnpj, cidade, uf) VALUES ('Loja Atendida', '11222333000181', 'Joinville', 'SC'),
       ('Só do ERP', '22222333000106', 'Curitiba', 'PR'), ('Sem CNPJ', NULL, 'Lapa', 'PR');
-    INSERT INTO promotores (nome, tipo, agencia) VALUES ('Ana', 'AGENCIA', 'X');
+    INSERT INTO promotores (nome, tipo, agencia, salario) VALUES ('Ana', 'AGENCIA', 'X', 0), ('Beto Souza - Sup ll', 'CLT', '', 3000),
+      ('101 do Brasil - Filial PR (CLT)', 'CLT', '101 do Brasil - Filial PR (CLT)', 0);
     INSERT INTO importacoes (tipo) VALUES ('faturamento');
     INSERT INTO faturamento (loja_id, mes, empresa, valor, importacao_id) VALUES (1, '2026-10', '60', 1000, 1), (1, '2026-10', '63', 500, 1),
       (2, '2026-10', '60', 700, 1), (3, '2026-10', '', 50, 1);
@@ -50,6 +56,12 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     { nome: 'Sem CNPJ', chave: '|sem cnpj|lapa' }, // a loja "Só do ERP" virou cliente do ERP (não tinha atendimento)
   ]);
   assert.equal((await consulta('SELECT count(*)::int AS n FROM visitas'))[0].n, 2);
+  // Cargo separado do nome; nome de agência com " - " fica inteiro; quem tem salário vira "cadastrado".
+  assert.deepEqual(await consulta('SELECT nome, cargo, cadastrado FROM promotores ORDER BY id'), [
+    { nome: 'Ana', cargo: '', cadastrado: false },
+    { nome: 'Beto Souza', cargo: 'Sup ll', cadastrado: true },
+    { nome: '101 do Brasil - Filial PR (CLT)', cargo: '', cadastrado: false },
+  ]);
   assert.equal((await consulta('SELECT count(*)::int AS n FROM backup_faturamento_por_loja'))[0].n, 4); // cópia de segurança
   assert.equal((await consulta("SELECT to_regclass('public.faturamento') AS t"))[0].t, null);
 
@@ -254,6 +266,96 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       assert.equal(resposta.status, 200, caminho);
       assert.match(resposta.headers.get('content-type'), /spreadsheetml/, caminho);
     }
+  });
+
+  await t.test('faturamento: reimportar substitui o mês inteiro; a prévia avisa; desfazer restaura o anterior', async () => {
+    const C1 = '11222333000181'; const C2 = '22222333000106'; const C3 = '33333444000106';
+    const fat = (linhas, arquivo) => ({
+      tipo: 'faturamento', arquivo,
+      itens: linhas.map(([cnpj, valor, empresa = '60']) => ({ loja: { cnpj, nome: `C ${cnpj}`, cidade: 'X', uf: 'SC' }, mes: '2026-05', empresa, valor })),
+    });
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    const previa = (d) => regis('/api/importar/previa', { method: 'POST', json: d });
+    const totalMaio = async () => (await regis('/api/faturamento?de=2026-05&ate=2026-05')).dados.totais.faturamento;
+
+    await gravar(fat([[C3, 500, '63']], 'empresa63.xls')); // outra empresa no mesmo mês: não pode ser apagada
+    const v1 = fat([[C1, 1000], [C2, 2000]], 'maio-v1.xls');
+    assert.equal((await previa(v1)).dados.mensagem, 'Isto vai substituir todo o mês mai/2026 da empresa 60 (0 registros atuais).');
+    await gravar(v1);
+    assert.equal(await totalMaio(), 3500);
+
+    const v2 = fat([[C1, 1500]], 'maio-v2.xls'); // o C2 saiu do arquivo
+    assert.equal((await previa(v2)).dados.mensagem, 'Isto vai substituir todo o mês mai/2026 da empresa 60 (2 registros atuais).');
+    assert.equal(await totalMaio(), 3500); // a prévia não grava nada
+    assert.equal((await gravar(v2)).dados.substituidas, 2);
+    assert.equal(await totalMaio(), 2000); // 1.500 do C1 + 500 da empresa 63; o C2 sumiu
+
+    // Só a mais recente de cada mês pode ser desfeita.
+    const lista = async () => Object.fromEntries((await regis('/api/importacoes')).dados.map((i) => [i.arquivo, i]));
+    let imps = await lista();
+    assert.deepEqual([imps['empresa63.xls'].podeDesfazer, imps['maio-v1.xls'].podeDesfazer, imps['maio-v2.xls'].podeDesfazer], [false, false, true]);
+    assert.equal((await regis(`/api/importacoes/${imps['maio-v1.xls'].id}`, { method: 'DELETE' })).status, 400);
+    const d = (await regis(`/api/importacoes/${imps['maio-v2.xls'].id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.restaurados], [1, 2]);
+    assert.equal(await totalMaio(), 3500); // voltou o que o v1 tinha gravado
+    imps = await lista();
+    assert.equal(imps['maio-v1.xls'].podeDesfazer, true); // agora ela é a mais recente de maio
+    const d1 = (await regis(`/api/importacoes/${imps['maio-v1.xls'].id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d1.registros, d1.restaurados], [2, 0]);
+    assert.equal(await totalMaio(), 500);
+  });
+
+  await t.test('atendimentos: reimportar substitui o mês só das agências do arquivo; desfazer restaura', async () => {
+    const vis = (agencia, lojas, arquivo) => ({
+      tipo: 'visitas', arquivo,
+      itens: lojas.map((nome) => ({ promotor: { nome: `P ${agencia}`, tipo: 'AGENCIA', agencia }, loja: { nome, cnpj: '', cidade: 'Y' }, mes: '2026-06', visitas: 1, custo: 10 })),
+    });
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    const lojasDeJunho = async () => (await regis('/api/lojas-uf?de=2026-06&ate=2026-06')).dados.linhas.map((l) => l.loja).sort();
+    await gravar(vis('Ag A', ['L1', 'L2'], 'a1.xlsx'));
+    await gravar(vis('Ag B', ['L3'], 'b1.xlsx'));
+    const a2 = vis('Ag A', ['L1'], 'a2.xlsx'); // a L2 saiu do arquivo da agência A
+    const previa = (await regis('/api/importar/previa', { method: 'POST', json: a2 })).dados;
+    assert.equal(previa.mensagem, 'Isto vai substituir todo o mês jun/2026 da(s) agência(s) Ag A (2 registros atuais, inclusive os lançados à mão na tela).');
+    assert.equal((await gravar(a2)).dados.substituidas, 2);
+    assert.deepEqual(await lojasDeJunho(), ['L1', 'L3']); // a agência B ficou como estava
+    const imp = (await regis('/api/importacoes')).dados.find((i) => i.arquivo === 'a2.xlsx');
+    const d = (await regis(`/api/importacoes/${imp.id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.restaurados], [1, 2]);
+    assert.deepEqual(await lojasDeJunho(), ['L1', 'L2', 'L3']);
+
+    // O cadastro de promotores não pode ser desfeito.
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'promotores', arquivo: 'cad.xlsx', itens: [{ nome: 'Zé Cadastro', codigo: '501', tipo: 'CLT' }] } });
+    const cad = (await regis('/api/importacoes')).dados.find((i) => i.arquivo === 'cad.xlsx');
+    assert.equal(cad.podeDesfazer, false);
+    assert.equal((await regis(`/api/importacoes/${cad.id}`, { method: 'DELETE' })).status, 400);
+  });
+
+  await t.test('CLT: código "6" acha "06"; cargo separado do nome; supervisor fora do custo; aviso de código sem cadastro', async () => {
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    const zero = { periculosidade: 0, ajuda_celular: 0, ajuda_custo: 0, almoco: 0, vale_transporte: 0, gratificacao: 0, outros_custos: 0 };
+    await gravar({ tipo: 'promotores', arquivo: 'cadastro-sc.xlsx', itens: [
+      { nome: 'Joana Lima - Sup ll', codigo: '07', tipo: 'CLT', empresa: 'Filial SC', salario: 5000, ...zero },
+      { nome: 'Paulo Alves', codigo: '06', tipo: 'CLT', empresa: 'Filial SC', salario: 2000, ...zero },
+    ] });
+    const loja = { nome: 'Loja Abril', cnpj: '', cidade: 'Z' };
+    const r = (await gravar({ tipo: 'visitas', arquivo: 'abril.xlsx', itens: [
+      { promotor: { nome: 'PAULO', tipo: 'CLT', agencia: 'Filial SC (CLT)', codigo: '6' }, loja, mes: '2026-04', visitas: 4, custo: null },
+      { promotor: { nome: 'ZECA', tipo: 'CLT', agencia: 'Filial SC (CLT)', codigo: '99' }, loja, mes: '2026-04', visitas: 4, custo: null },
+    ] })).dados;
+    assert.equal(r.avisos['Promotor com código que não está no cadastro (sem salário para calcular o custo)'], 1);
+
+    const lista = (await regis('/api/promotores?de=2026-04&ate=2026-04')).dados.promotores;
+    const paulo = lista.find((p) => p.nome === 'Paulo Alves');
+    assert.deepEqual([paulo.qtdLojas, paulo.custo, paulo.agencia], [1, 2000, 'Filial SC (CLT)']); // achou pelo código e ganhou a agência
+    const joana = lista.find((p) => p.nome === 'Joana Lima');
+    assert.deepEqual([joana.cargo, joana.supervisor, joana.custo, joana.situacao], ['Sup ll', true, null, 'sem_dados']);
+
+    const avisos = (await regis('/api/resumo?de=2026-04&ate=2026-04')).dados.avisos;
+    const semCadastro = avisos.find((a) => a.id === 'codigo_sem_cadastro');
+    assert.deepEqual(semCadastro.itens, ['Filial SC (CLT) — ZECA (código 99): 1 loja(s)']);
+    const semLoja = avisos.find((a) => a.id === 'sem_lojas');
+    assert.ok(!semLoja.itens.some((i) => i.startsWith('Joana')), 'supervisor não entra em "Promotores sem loja lançada"');
   });
 
   await t.test('endereço ou corpo inválido responde 400, sem revelar detalhes do banco', async () => {

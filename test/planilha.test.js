@@ -181,3 +181,26 @@ test('cadastro de promotores: reconhece as colunas e trata texto no lugar de val
   assert.deepEqual(avisos, { 'Promotor com texto no lugar de valor (veja a observação no cadastro)': 1 });
   assert.deepEqual(motivos, { 'Linha de cabeçalho repetida': 1, 'Linha sem nome': 1 });
 });
+
+test('cargo grudado no nome, supervisor e código do promotor', () => {
+  const { separarCargo, ehSupervisor, codigoNormal } = require('../src/planilha');
+  assert.deepEqual(separarCargo('SARA ADRIANA DIAS SOUTO - Sup ll'), { nome: 'SARA ADRIANA DIAS SOUTO', cargo: 'Sup ll' });
+  assert.deepEqual(separarCargo('Alessandra Cipriano Pamplona - Sup.'), { nome: 'Alessandra Cipriano Pamplona', cargo: 'Sup.' });
+  assert.deepEqual(separarCargo('MARCUS YURI DO CARMO PEREIRA - Lider'), { nome: 'MARCUS YURI DO CARMO PEREIRA', cargo: 'Lider' });
+  // Nomes de agência com parênteses ou números ficam inteiros.
+  assert.equal(separarCargo('101 do Brasil - Filial PR (CLT)').cargo, '');
+  assert.equal(separarCargo('MEI PR - Joseane (68.481.098/0001-80)').cargo, '');
+  assert.equal(separarCargo('Maria').cargo, '');
+  assert.deepEqual(['Sup.', 'Sup ll', 'Sup. l', 'supervisor', 'Supervisora'].map(ehSupervisor), [true, true, true, true, true]);
+  assert.deepEqual(['Lider', 'INSS', 'Lic. Maternidade', '', 'Suporte'].map(ehSupervisor), [false, false, false, false, false]);
+  assert.equal(codigoNormal('06'), codigoNormal(6));
+  assert.equal(codigoNormal(' 0030389 '), '30389');
+  assert.equal(codigoNormal('0'), '0');
+});
+
+test('cadastro: o agrupador separa o cargo do nome', () => {
+  const agrupador = criarAgrupador('promotores', { nome: 0, codigo: 1, salario: 2 }, {});
+  agrupador.adicionar(['Lionis Valter Garcez - Sup. ll', '30001', 3000]);
+  const [item] = agrupador.resultado().itens;
+  assert.deepEqual([item.nome, item.cargo, item.codigo], ['Lionis Valter Garcez', 'Sup. ll', '30001']);
+});

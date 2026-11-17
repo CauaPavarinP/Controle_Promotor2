@@ -1,7 +1,7 @@
 // Conexão com o PostgreSQL e criação das tabelas.
 const { Pool, types } = require('pg');
 const config = require('./config');
-const { chaveDaLoja } = require('../public/js/planilha-comum');
+const { chaveDaLoja, separarCargo } = require('../public/js/planilha-comum');
 
 // O PostgreSQL devolve números decimais (numeric) como texto. Aqui pedimos como número.
 types.setTypeParser(1700, (valor) => parseFloat(valor));
@@ -145,6 +145,23 @@ ALTER TABLE visitas ADD COLUMN IF NOT EXISTS dias_visita TEXT NOT NULL DEFAULT '
 ALTER TABLE visitas ADD COLUMN IF NOT EXISTS status      TEXT NOT NULL DEFAULT '';
 ALTER TABLE visitas ADD COLUMN IF NOT EXISTS supervisor  TEXT NOT NULL DEFAULT '';
 ALTER TABLE visitas ADD COLUMN IF NOT EXISTS observacao  TEXT NOT NULL DEFAULT '';
+
+-- Cargo do promotor ("Sup ll", "Lider"...), separado do nome. Supervisor não entra no custo dos promotores.
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS cargo      TEXT NOT NULL DEFAULT '';
+-- true = veio do cadastro (planilha de cadastro ou tela). false = criado só pela planilha de atendimentos.
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS cadastrado BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE promotores SET cadastrado = TRUE
+  WHERE NOT cadastrado AND (salario > 0 OR empresa <> '' OR admissao <> '' OR regiao <> '');
+
+-- Desfazer importação: cópia das linhas que a importação substituiu, para poder restaurar.
+-- "restauravel" = a importação guardou essa cópia (as feitas antes desta versão não guardaram).
+ALTER TABLE importacoes ADD COLUMN IF NOT EXISTS restauravel BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS importacoes_backup (
+  importacao_id INTEGER NOT NULL REFERENCES importacoes(id) ON DELETE CASCADE,
+  tabela        TEXT NOT NULL,
+  dados         JSONB NOT NULL,
+  PRIMARY KEY (importacao_id, tabela)
+);
 `;
 
 // Versão anterior: o faturamento era guardado POR LOJA (tabela "faturamento"), e cada CNPJ do ERP virava uma
@@ -192,10 +209,25 @@ async function migrarFaturamentoPorCnpj() {
   await consulta('CREATE UNIQUE INDEX IF NOT EXISTS lojas_chave ON lojas (chave)');
 }
 
+// Nomes que vieram com o cargo junto ("NOME - Sup ll"): separa em nome + cargo. Só para CLT e só quando
+// o nome não é o próprio nome da agência. Se já existir outro promotor com o nome limpo (mesma agência e
+// código), deixa como está para não juntar duas pessoas por engano.
+async function separarCargosDosNomes() {
+  const candidatos = await consulta("SELECT id, nome, agencia, codigo FROM promotores WHERE tipo = 'CLT' AND cargo = '' AND nome LIKE '% - %' AND nome <> agencia");
+  for (const p of candidatos) {
+    const { nome, cargo } = separarCargo(p.nome);
+    if (!cargo) continue;
+    const [outro] = await consulta('SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4', [nome, p.agencia, p.codigo, p.id]);
+    if (outro) { console.warn(`Cargo não separado do promotor ${p.id} ("${p.nome}"): já existe outro com o nome "${nome}".`); continue; }
+    await consulta('UPDATE promotores SET nome = $1, cargo = $2 WHERE id = $3', [nome, cargo, p.id]);
+  }
+}
+
 async function iniciarBanco() {
   await consulta(TABELAS);
   await consulta(ATUALIZACOES);
   await migrarFaturamentoPorCnpj();
+  await separarCargosDosNomes();
 }
 
 async function fecharBanco() {

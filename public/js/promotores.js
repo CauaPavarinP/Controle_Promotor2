@@ -18,7 +18,7 @@ async function carregar() {
       mostrarAvisos(avisos);
       paginas.mostrar(promotores.map((p) => `
         <tr class="clicavel" data-id="${p.id}">
-          <td><a href="/promotor?id=${p.id}">${esc(p.nome)}</a>${p.ativo ? '' : ' <span class="etiqueta">Inativo</span>'}</td>
+          <td><a href="/promotor?id=${p.id}">${esc(p.nome)}</a>${p.ativo ? '' : ' <span class="etiqueta">Inativo</span>'}${p.supervisor ? ' <span class="etiqueta" title="Supervisor não entra no custo dos promotores">Supervisor</span>' : ''}${p.cargo && !p.supervisor ? `<span class="menor">${esc(p.cargo)}</span>` : ''}</td>
           <td>${esc(TIPOS[p.tipo] || p.tipo)}${p.agencia && p.agencia !== p.nome ? `<span class="menor">${esc(p.agencia)}</span>` : ''}</td>
           <td class="num">${p.qtdLojas}</td>
           <td class="num">${p.visitas || '—'}</td>

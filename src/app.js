@@ -7,7 +7,9 @@ const { consulta } = require('./db');
 const auth = require('./auth');
 const relatorios = require('./relatorios');
 const planilha = require('./planilha');
-const { gravarFaturamento, gravarVisitas, gravarPromotores, ErroDeImportacao } = require('./importar');
+const {
+  gravarFaturamento, gravarVisitas, gravarPromotores, previaDaImportacao, listarImportacoes, desfazerImportacao, ErroDeImportacao, NaoEncontrado,
+} = require('./importar');
 
 const ROTULO_SITUACAO = {
   dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados',
@@ -42,7 +44,7 @@ function criarApp() {
   }));
   // Limite pequeno para as chamadas comuns; a gravação da importação tem o seu próprio limite, maior.
   const jsonPequeno = express.json({ limit: '200kb' });
-  app.use((req, res, next) => (req.path === '/api/importar/gravar' ? next() : jsonPequeno(req, res, next)));
+  app.use((req, res, next) => (['/api/importar/gravar', '/api/importar/previa'].includes(req.path) ? next() : jsonPequeno(req, res, next)));
 
   // Formulário enviado em outro formato (ou sem corpo) chega sem "req.body". Trocamos por um objeto vazio,
   // para as validações responderem "faltou tal campo" (400) em vez de o código quebrar (500).
@@ -289,22 +291,23 @@ function criarApp() {
     res.json(await gravar(dados, req.usuario.nome));
   });
 
-  // Desfaz uma importação: apaga o faturamento ou os atendimentos que ela gravou e que ainda são dela
-  // (o que uma importação mais nova substituiu já pertence à mais nova e não é apagado).
-  // Lojas e promotores cadastrados por ela continuam no sistema.
-  api.delete('/importacoes/:id', async (req, res) => {
-    const id = Number(req.params.id);
-    const [importacao] = await consulta('SELECT tipo FROM importacoes WHERE id = $1', [id]);
-    if (!importacao) return res.status(404).json({ erro: 'Importação não encontrada.' });
-    const tabela = { faturamento: 'faturamento_erp', visitas: 'visitas' }[importacao.tipo];
-    const apagados = tabela ? await consulta(`DELETE FROM ${tabela} WHERE importacao_id = $1 RETURNING 1`, [id]) : [];
-    await consulta('DELETE FROM importacoes WHERE id = $1', [id]);
-    res.json({ ok: true, registros: apagados.length });
+  // Prévia: antes de gravar, a tela mostra o que vai ser substituído ("Isto vai substituir todo o mês...").
+  api.post('/importar/previa', express.json({ limit: '50mb' }), async (req, res) => {
+    res.json(await previaDaImportacao(req.body && typeof req.body === 'object' ? req.body : {}));
   });
 
-  api.get('/importacoes', async (req, res) => {
-    res.json(await consulta('SELECT * FROM importacoes ORDER BY id DESC LIMIT 30'));
+  // Desfaz uma importação: apaga o que ela gravou e restaura o que ela tinha substituído.
+  // Só a mais recente de cada mês/tipo; a do cadastro de promotores não pode ser desfeita.
+  api.delete('/importacoes/:id', async (req, res) => {
+    try {
+      res.json({ ok: true, ...(await desfazerImportacao(Number(req.params.id))) });
+    } catch (erro) {
+      if (erro instanceof NaoEncontrado) return res.status(404).json({ erro: erro.message });
+      throw erro;
+    }
   });
+
+  api.get('/importacoes', async (req, res) => res.json(await listarImportacoes()));
 
   // ---------- Usuários (só o suporte) ----------
   api.get('/usuarios', auth.exigirSuporte, async (req, res) => res.json(await auth.listarUsuarios()));

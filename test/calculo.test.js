@@ -175,3 +175,27 @@ test('situações: dentro, fora e sem faturamento', () => {
   assert.deepEqual(porLoja, { 1: 'dentro', 2: 'sem_faturamento', 3: 'sem_faturamento' }); // 300 / 10.000 = 3%: dentro (no limite)
   assert.equal(somar([{ ...a.linhas[0], custo: 300.01 }], 3).situacao, 'fora');
 });
+
+test('supervisor não entra no custo dos promotores nem em "sem loja lançada"', () => {
+  const supervisora = { id: 40, nome: 'Joana', tipo: 'CLT', cargo: 'Sup ll', salario: 5000, ativo: true };
+  const a = analisar(base({
+    promotores: [agencia, supervisora],
+    visitas: [visita(10, 1, '2026-10', 100), visita(40, 2, '2026-10', null)],
+    faturamentos: [{ cnpj: CNPJ_A, mes: '2026-10', valor: 10000 }],
+  }));
+  assert.equal(a.linhas.find((l) => l.promotorId === 40).custo, null); // salário de supervisor não vira custo de loja
+  const semSup = analisar(base({ promotores: [agencia, supervisora], visitas: [visita(10, 1, '2026-10', 100)], faturamentos: [] }));
+  assert.equal(semSup.semLoja.length, 0);
+});
+
+test('aviso: atendimento com código que não achou ninguém no cadastro', () => {
+  const doAtendimento = { id: 50, nome: 'ZECA', tipo: 'CLT', agencia: 'Filial', codigo: '99', cadastrado: false, ativo: true };
+  const doCadastro = { id: 51, nome: 'Pedro', tipo: 'CLT', agencia: 'Filial', codigo: '06', cadastrado: true, salario: 2000, ativo: true };
+  const a = analisar(base({
+    promotores: [doAtendimento, doCadastro],
+    visitas: [visita(50, 1, '2026-10', null), visita(51, 1, '2026-10', null)],
+    faturamentos: [],
+  }));
+  const av = avisosDe(a).find((x) => x.id === 'codigo_sem_cadastro');
+  assert.deepEqual(av.itens, ['Filial — ZECA (código 99): 1 loja(s)']);
+});

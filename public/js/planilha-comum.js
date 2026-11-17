@@ -50,6 +50,7 @@
     promotores: [
       { campo: 'nome', rotulo: 'Nome do promotor', nomes: ['nome', 'promotor', 'colaborador', 'funcionario'] },
       { campo: 'codigo', rotulo: 'Código / matrícula', nomes: ['codigo', 'matricula', 'codigo do promotor'] },
+      { campo: 'cargo', rotulo: 'Cargo (se vier separado do nome)', nomes: ['cargo', 'funcao'] },
       { campo: 'empresa', rotulo: 'Empresa / grupo', nomes: ['empresa grupo', 'empresa', 'grupo'] },
       { campo: 'admissao', rotulo: 'Admissão', nomes: ['admissao', 'data admissao', 'data de admissao'] },
       { campo: 'salario', rotulo: 'Salário', nomes: ['salario r', 'salario'] },
@@ -300,6 +301,22 @@
   }
 
   const primeiroNome = (nome) => normalizar(nome).split(' ')[0] || '';
+
+  // "NOME DA PESSOA - Sup ll" -> { nome: 'NOME DA PESSOA', cargo: 'Sup ll' }.
+  // Só separa quando o fim parece um cargo: curto e sem números, parênteses ou barra. Assim nomes de agência
+  // como "101 do Brasil - Filial PR (CLT)" ou "MEI PR - Joseane (68.481...)" não são cortados.
+  function separarCargo(texto) {
+    const t = textoDe(texto);
+    const m = t.match(/^(.*\S)\s+-\s+([^\d()/]{2,30})$/);
+    if (!m || m[1].trim().length < 3) return { nome: t, cargo: '' };
+    return { nome: m[1].trim(), cargo: m[2].trim() };
+  }
+
+  // Supervisor ("Sup.", "Sup ll", "supervisor", "Supervisora"...): não entra no custo dos promotores.
+  const ehSupervisor = (cargo) => /^sup( |$)|^supervis/.test(normalizar(cargo));
+
+  // Código do promotor para comparar: "06", "6" e " 6 " são o mesmo código (o Excel às vezes tira o zero).
+  const codigoNormal = (codigo) => textoDe(codigo).replace(/\s+/g, '').replace(/^0+(?=.)/, '').toLowerCase();
   const CAMPOS_DINHEIRO = ['salario', 'periculosidade', 'ajuda_celular', 'ajuda_custo', 'almoco', 'vale_transporte', 'gratificacao', 'outros_custos'];
 
   // Recebe as linhas de dados uma a uma e monta os "itens" que o servidor vai gravar:
@@ -417,8 +434,10 @@
       const nome = textoDe(pegar(linha, 'nome'));
       if (!nome) return ignorar('Linha sem nome');
       if (normalizar(nome) === 'nome') return ignorar('Linha de cabeçalho repetida'); // o cadastro repete o título a cada grupo
+      const separado = separarCargo(nome);
       const item = {
-        nome,
+        nome: separado.nome,
+        cargo: textoDe(pegar(linha, 'cargo')) || separado.cargo,
         codigo: textoDe(pegar(linha, 'codigo')),
         tipo: tipoDe(pegar(linha, 'tipo'), tipoPadrao),
         agencia: textoDe(pegar(linha, 'agencia')),
@@ -455,5 +474,5 @@
     };
   }
 
-  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
+  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, separarCargo, ehSupervisor, codigoNormal, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
 });

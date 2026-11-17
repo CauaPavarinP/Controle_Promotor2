@@ -15,8 +15,8 @@ const AJUDA = {
   promotores: 'Aba "Promotores CLT" do modelo padrão: nome, código, salário e adicionais. Quem já está cadastrado tem os valores atualizados.',
 };
 const SUBSTITUI = {
-  faturamento: 'Atenção: se já existir faturamento da mesma loja, mês e empresa, o valor deste arquivo substitui o anterior (não soma).',
-  visitas: 'Atenção: se já existirem atendimentos do mesmo promotor, loja e mês, os deste arquivo substituem os anteriores (não somam).',
+  faturamento: 'Atenção: o arquivo substitui o MÊS INTEIRO de cada empresa que ele traz. Cliente que não estiver no arquivo sai desse mês. Antes de gravar, o sistema mostra quantos registros serão substituídos.',
+  visitas: 'Atenção: o arquivo substitui o MÊS INTEIRO das agências que ele traz (as outras agências não mudam). Loja que não estiver no arquivo sai desse mês, inclusive as lançadas à mão. Antes de gravar, o sistema mostra quantos registros serão substituídos.',
   promotores: 'Atenção: para quem já está cadastrado, o salário e os demais valores passam a ser os deste arquivo.',
 };
 
@@ -182,6 +182,21 @@ function opcoesDaTela(tipo, mapa) {
   return opcoes;
 }
 
+// Mostra na tela o que vai ser substituído e espera a pessoa confirmar. Devolve true (confirmou) ou false.
+function perguntar(previa, tipo) {
+  const janela = el('janela-previa');
+  el('previa-texto').innerHTML = previa.mensagem.split('\n').map((linha) => `<p>${esc(linha)}</p>`).join('');
+  el('previa-ajuda').hidden = tipo === 'promotores';
+  el('previa-ok').textContent = tipo === 'promotores' ? 'Atualizar o cadastro' : 'Substituir e importar';
+  return new Promise((responder) => {
+    const fechar = (resposta) => { janela.close(); responder(resposta); };
+    el('previa-cancelar').onclick = () => fechar(false);
+    janela.onclose = () => responder(false); // tecla Esc
+    janela.querySelector('form').onsubmit = (evento) => { evento.preventDefault(); fechar(true); };
+    janela.showModal();
+  });
+}
+
 // Passo 2: lê o arquivo inteiro somando as linhas, e envia o resultado para o servidor gravar.
 async function confirmar() {
   const aviso = el('aviso');
@@ -207,13 +222,20 @@ async function confirmar() {
 
     const { itens, motivos, avisos } = agrupador.resultado();
     if (!itens.length) throw new Error(`Nenhuma linha válida no arquivo. ${Object.keys(motivos).join('; ')}`);
+    // Antes de gravar: "Isto vai substituir todo o mês X (N registros atuais)". Só grava se a pessoa confirmar.
+    const envio = { tipo, arquivo: arquivo.name, itens, motivos, avisos };
+    progresso('Conferindo o que já existe nesses meses…');
+    const previa = await api('/api/importar/previa', { method: 'POST', json: envio });
+    progresso('');
+    if (!(await perguntar(previa, tipo))) { mostrarAviso(aviso, 'Importação cancelada. Nada foi gravado.', ''); return; }
     progresso(`Gravando ${itens.length} registro(s)…`);
-    const r = await api('/api/importar/gravar', { method: 'POST', json: { tipo, arquivo: arquivo.name, itens, motivos, avisos } });
+    const r = await api('/api/importar/gravar', { method: 'POST', json: envio });
 
     const lista = (contagens) => Object.entries(contagens).map(([frase, n]) => `${frase} (${n})`).join('; ');
     const partes = [tipo === 'promotores'
       ? `Importação concluída: ${r.importadas} promotor(es), custo mensal somado de ${reais(r.total)}.`
       : `Importação concluída: ${r.importadas} registro(s), total ${reais(r.total)}, mês(es) ${r.meses.map(rotuloMes).join(', ')}.`];
+    if (r.substituidas) partes.push(`${r.substituidas} registro(s) antigo(s) desses meses foram substituídos (a cópia ficou guardada para desfazer).`);
     if (r.lojasNovas) partes.push(`${r.lojasNovas} loja(s) nova(s) cadastrada(s).`);
     if (r.clientesNovos) partes.push(`${r.clientesNovos} CNPJ(s) novo(s) no faturamento do ERP.`);
     if (r.promotoresNovos) partes.push(`${r.promotoresNovos} promotor(es) novo(s) cadastrado(s).`);
@@ -254,7 +276,9 @@ async function carregarListas() {
       <td><span class="cortar" title="${esc(h.arquivo)}">${esc(h.arquivo)}</span><span class="menor">${{ faturamento: 'Faturamento', visitas: 'Atendimentos', promotores: 'Cadastro de promotores' }[h.tipo] || esc(h.tipo)}</span></td>
       <td>${esc(resumoDosMeses(h.meses))}</td>
       <td class="num">${h.linhas}</td><td class="num">${h.ignoradas}</td><td class="num">${reais(h.total)}</td>
-      <td>${h.tipo === 'promotores' ? '' : `<button type="button" class="perigo pequeno" data-desfazer="${h.id}" data-nome="${esc(h.arquivo)}">Desfazer</button>`}</td>
+      <td>${h.podeDesfazer
+        ? `<button type="button" class="perigo pequeno" data-desfazer="${h.id}" data-nome="${esc(h.arquivo)}" data-sem-copia="${h.restauravel ? '' : 'sim'}">Desfazer</button>`
+        : `<span class="menor" title="${esc(h.motivoNaoDesfaz)}">${h.tipo === 'promotores' ? 'não se desfaz' : 'há uma mais nova'}</span>`}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="vazio">Nenhuma importação ainda.</td></tr>';
 }
 
@@ -262,11 +286,14 @@ async function carregarListas() {
 async function desfazer(evento) {
   const botao = evento.target.closest('button[data-desfazer]');
   if (!botao) return;
-  if (!confirm(`Desfazer a importação de "${botao.dataset.nome}"? Os dados que vieram desse arquivo serão apagados (o que uma importação mais nova substituiu continua).`)) return;
+  const pergunta = botao.dataset.semCopia
+    ? `Desfazer a importação de "${botao.dataset.nome}"? Ela é de antes da cópia de segurança: os dados dela serão apagados, mas o que ela substituiu NÃO volta.`
+    : `Desfazer a importação de "${botao.dataset.nome}"? Os dados dela serão apagados e os que existiam antes dela voltam.`;
+  if (!confirm(pergunta)) return;
   try {
     const r = await api(`/api/importacoes/${botao.dataset.desfazer}`, { method: 'DELETE' });
     const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
-    mostrarAviso(el('aviso'), `Importação desfeita: ${r.registros} registro(s) apagado(s).`, 'ok');
+    mostrarAviso(el('aviso'), `Importação desfeita: ${r.registros} registro(s) apagado(s) e ${r.restaurados} restaurado(s).`, 'ok');
     await carregarListas();
   } catch (erro) {
     mostrarAviso(el('aviso'), erro.message);

@@ -1,5 +1,5 @@
 // Janela de cadastro do promotor (usada na lista de Promotores e na ficha do promotor).
-const CAMPOS_TEXTO = ['nome', 'tipo', 'agencia', 'codigo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao'];
+const CAMPOS_TEXTO = ['nome', 'tipo', 'agencia', 'codigo', 'cargo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao'];
 const CAMPOS_DINHEIRO = [
   ['salario', 'Salário'], ['periculosidade', 'Periculosidade'], ['ajuda_celular', 'Ajuda celular'],
   ['ajuda_custo', 'Ajuda de custo / alimentação'], ['almoco', 'Almoço'], ['vale_transporte', 'Vale-transporte'],
@@ -22,6 +22,8 @@ function abrirFormPromotor(promotor, aoSalvar) {
             <select id="p-tipo"><option value="CLT">CLT</option><option value="MEI">MEI</option><option value="AGENCIA">Agência</option><option value="FREELANCER">Freelancer</option></select></div>
           <div class="campo"><label for="p-agencia">Agência (se houver)</label><input id="p-agencia" maxlength="120"></div>
           <div class="campo"><label for="p-codigo">Código / matrícula</label><input id="p-codigo" maxlength="30"></div>
+          <div class="campo"><label for="p-cargo">Cargo</label><input id="p-cargo" maxlength="60" placeholder="Ex.: Promotor, Lider, Sup ll">
+            <p class="ajuda">Supervisor não entra no custo dos promotores.</p></div>
           <div class="campo"><label for="p-empresa">Empresa / grupo</label><input id="p-empresa" maxlength="120"></div>
           <div class="campo"><label for="p-regiao">Região</label><input id="p-regiao" maxlength="120"></div>
           <div class="campo"><label for="p-admissao">Admissão</label><input id="p-admissao" type="date"></div>

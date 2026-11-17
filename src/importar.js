@@ -1,8 +1,10 @@
 // Gravação das importações: faturamento (FoccoERP) e visitas (agências, CLTs, MEIs).
 // O navegador já leu o arquivo e somou as linhas (ver public/js/planilha-comum.js). Aqui chegam só os
 // "itens" prontos. Mesmo assim conferimos tudo de novo: o servidor nunca confia no que vem do navegador.
-const { transacao } = require('./db');
-const { mesValido, primeiroNome, ufDe, chaveDaLoja, TIPOS_VALIDOS, CAMPOS_DINHEIRO } = require('./planilha');
+const { transacao, consulta } = require('./db');
+const {
+  mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
+} = require('./planilha');
 
 class ErroDeImportacao extends Error {}
 
@@ -110,9 +112,19 @@ function conferirTotal(valor) {
   return Math.round(valor * 100) / 100;
 }
 
+// "restauravel": faturamento e atendimentos guardam cópia do que substituem, então podem ser desfeitos.
 async function registrarImportacao(rodar, tipo, arquivo, usuario) {
-  const [imp] = await rodar('INSERT INTO importacoes (tipo, arquivo, usuario) VALUES ($1, $2, $3) RETURNING id', [tipo, texto(arquivo, 200), usuario]);
+  const [imp] = await rodar('INSERT INTO importacoes (tipo, arquivo, usuario, restauravel) VALUES ($1, $2, $3, $4) RETURNING id',
+    [tipo, texto(arquivo, 200), usuario, tipo !== 'promotores']);
   return imp.id;
+}
+
+const NOMES_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const rotuloMes = (mes) => `${NOMES_MESES[Number(mes.slice(5)) - 1]}/${mes.slice(0, 4)}`;
+
+// Guarda as linhas que a importação vai apagar, para o "Desfazer" poder restaurá-las.
+async function guardarCopia(rodar, importacaoId, tabela, linhas) {
+  await rodar('INSERT INTO importacoes_backup (importacao_id, tabela, dados) VALUES ($1, $2, $3::jsonb)', [importacaoId, tabela, JSON.stringify(linhas)]);
 }
 
 async function fecharImportacao(rodar, id, resultado) {
@@ -133,18 +145,40 @@ function montarResultado(registros, { motivos, avisos }, contagem, campoTotal) {
 }
 
 // ---------- Faturamento ----------
-// Um valor por CNPJ + mês + empresa. Se já existia, o valor novo SUBSTITUI o antigo
-// (por isso exporte sempre o mês inteiro do Focco). Nome, cidade e UF do cliente ficam em "clientes_erp".
-async function gravarFaturamento(dados, usuario) {
+// Importar substitui o MÊS INTEIRO de cada empresa que o arquivo traz: antes de gravar, apaga todo o
+// faturamento daqueles meses e empresas (guardando uma cópia). Assim, um cliente que saiu do arquivo novo
+// não fica com o valor antigo. Por isso exporte do Focco sempre o mês inteiro.
+function prepararFaturamento(dados) {
   const registro = conferirEnvio(dados);
   const itens = dados.itens.map((item) => {
     const loja = conferirLoja(item.loja);
     if (!loja.cnpj) throw new ErroDeImportacao('Há um registro de faturamento sem CNPJ nos dados enviados.');
     return { loja, mes: conferirMes(item.mes), empresa: texto(item.empresa, 60), valor: conferirNumero(item.valor, { minimo: -1e12, nome: 'Valor' }) };
   });
+  const pares = new Map();
+  for (const i of itens) pares.set(`${i.mes}|${i.empresa}`, { mes: i.mes, empresa: i.empresa });
+  return { registro, itens, pares: [...pares.values()].sort((x, y) => x.mes.localeCompare(y.mes) || x.empresa.localeCompare(y.empresa)) };
+}
+
+// Linhas atuais do faturamento nos meses + empresas do arquivo.
+const escopoDoFaturamento = (rodar, pares, colunas) => rodar(
+  `SELECT ${colunas} FROM faturamento_erp f JOIN unnest($1::text[], $2::text[]) AS e(mes, empresa) ON f.mes = e.mes AND f.empresa = e.empresa`,
+  [pares.map((p) => p.mes), pares.map((p) => p.empresa)],
+);
+
+async function gravarFaturamento(dados, usuario) {
+  const { registro, itens, pares } = prepararFaturamento(dados);
 
   return transacao(async (rodar) => {
     const importacaoId = await registrarImportacao(rodar, 'faturamento', dados.arquivo, usuario);
+
+    // 1) Cópia do que vai ser substituído e 2) apaga o mês inteiro daquelas empresas.
+    const antigas = await escopoDoFaturamento(rodar, pares, 'f.cnpj, f.mes, f.empresa, f.valor, f.importacao_id');
+    await guardarCopia(rodar, importacaoId, 'faturamento_erp', antigas);
+    await rodar(
+      `DELETE FROM faturamento_erp f USING unnest($1::text[], $2::text[]) AS e(mes, empresa) WHERE f.mes = e.mes AND f.empresa = e.empresa`,
+      [pares.map((p) => p.mes), pares.map((p) => p.empresa)],
+    );
 
     // Clientes do ERP: grava ou atualiza nome, cidade e UF (vale o que veio por último no arquivo).
     const clientes = new Map();
@@ -161,7 +195,7 @@ async function gravarFaturamento(dados, usuario) {
       );
     }
 
-    // Soma de novo por CNPJ + mês + empresa, para nunca gravar a mesma chave duas vezes.
+    // 3) Grava o arquivo novo, somando por CNPJ + mês + empresa.
     const somas = new Map();
     for (const item of itens) {
       const chave = `${item.loja.cnpj}|${item.mes}|${item.empresa}`;
@@ -174,12 +208,11 @@ async function gravarFaturamento(dados, usuario) {
       const lote = registros.slice(i, i + LOTE);
       await rodar(
         `INSERT INTO faturamento_erp (cnpj, mes, empresa, valor, importacao_id)
-         SELECT cnpj, mes, empresa, valor, $5::int FROM unnest($1::text[], $2::text[], $3::text[], $4::numeric[]) AS t(cnpj, mes, empresa, valor)
-         ON CONFLICT (cnpj, mes, empresa) DO UPDATE SET valor = EXCLUDED.valor, importacao_id = EXCLUDED.importacao_id`,
+         SELECT cnpj, mes, empresa, valor, $5::int FROM unnest($1::text[], $2::text[], $3::text[], $4::numeric[]) AS t(cnpj, mes, empresa, valor)`,
         [lote.map((r) => r.cnpj), lote.map((r) => r.mes), lote.map((r) => r.empresa), lote.map((r) => r.valor), importacaoId],
       );
     }
-    const contagem = { clientesNovos: listaClientes.filter((c) => !existentes.has(c.cnpj)).length };
+    const contagem = { clientesNovos: listaClientes.filter((c) => !existentes.has(c.cnpj)).length, substituidas: antigas.length };
     const resultado = montarResultado(registros, registro, contagem, 'valor');
     await fecharImportacao(rodar, importacaoId, resultado);
     return resultado;
@@ -188,10 +221,15 @@ async function gravarFaturamento(dados, usuario) {
 
 // ---------- Promotores ----------
 
+// Agência de um promotor (a mesma regra de src/calculo.js): a da planilha de atendimentos ou, para quem
+// só está no cadastro, a empresa.
+const SQL_AGENCIA = "lower(coalesce(nullif(p.agencia, ''), nullif(p.empresa, ''), 'Sem agência'))";
+
 // Carrega o cadastro de promotores e devolve uma forma de achar "o mesmo promotor" que veio na planilha.
 // Regra para ser o mesmo:
-//   1º) mesmo código E mesmo primeiro nome (o código sozinho se repete entre empresas; e nas planilhas de
-//       atendimento vem só o primeiro nome, enquanto o cadastro traz o nome completo);
+//   1º) mesmo código E mesmo primeiro nome. O código é comparado sem zeros à esquerda ("06" = "6"), porque o
+//       Excel tira o zero quando a coluna é número. O código sozinho se repete entre empresas; e nas planilhas
+//       de atendimento vem só o primeiro nome, enquanto o cadastro traz o nome completo;
 //   2º) mesmo nome e mesma agência.
 async function carregarPromotores(rodar) {
   const porId = new Map();
@@ -200,7 +238,8 @@ async function carregarPromotores(rodar) {
   for (const p of await rodar('SELECT * FROM promotores ORDER BY id')) incluir(p);
   const achar = ({ nome, agencia = '', codigo = '' }) => {
     const primeiro = primeiroNome(nome);
-    return (codigo && lista.find((p) => p.codigo === codigo && primeiroNome(p.nome) === primeiro))
+    const cod = codigoNormal(codigo);
+    return (cod && lista.find((p) => codigoNormal(p.codigo) === cod && primeiroNome(p.nome) === primeiro))
       || lista.find((p) => p.nome.toLowerCase() === nome.toLowerCase() && p.agencia.toLowerCase() === agencia.toLowerCase())
       || null;
   };
@@ -209,12 +248,14 @@ async function carregarPromotores(rodar) {
 
 // Cadastro de promotores com os custos mensais (aba "Promotores CLT" do modelo).
 // Quem já existe é atualizado (salário e demais valores passam a ser os da planilha); quem não existe é criado.
-async function gravarPromotores(dados, usuario) {
+// O cargo que vem grudado no nome ("NOME - Sup ll") é separado na coluna "cargo".
+function prepararPromotores(dados) {
   const registro = conferirEnvio(dados);
-  const COLUNAS = ['nome', 'tipo', 'agencia', 'codigo', 'empresa', 'regiao', 'admissao', ...CAMPOS_DINHEIRO];
   const itens = dados.itens.map((item) => {
+    const separado = separarCargo(texto(item.nome, 160));
     const p = {
-      nome: texto(item.nome, 120),
+      nome: texto(separado.nome, 120),
+      cargo: texto(item.cargo, 60) || texto(separado.cargo, 60),
       tipo: TIPOS_VALIDOS.includes(item.tipo) ? item.tipo : 'CLT',
       agencia: texto(item.agencia, 120),
       codigo: texto(item.codigo, 30),
@@ -228,7 +269,12 @@ async function gravarPromotores(dados, usuario) {
     for (const campo of CAMPOS_DINHEIRO) p[campo] = conferirNumero(item[campo] ?? 0, { minimo: 0, nome: 'Valor do cadastro' });
     return p;
   });
+  return { registro, itens };
+}
 
+async function gravarPromotores(dados, usuario) {
+  const { registro, itens } = prepararPromotores(dados);
+  const COLUNAS = ['nome', 'cargo', 'tipo', 'agencia', 'codigo', 'empresa', 'regiao', 'admissao', ...CAMPOS_DINHEIRO];
   return transacao(async (rodar) => {
     const importacaoId = await registrarImportacao(rodar, 'promotores', dados.arquivo, usuario);
     const cadastro = await carregarPromotores(rodar);
@@ -242,18 +288,18 @@ async function gravarPromotores(dados, usuario) {
         valores[COLUNAS.indexOf('agencia')] = p.agencia || existente.agencia;
         const atribuicoes = COLUNAS.map((coluna, i) => `${coluna} = $${i + 1}`).join(', ');
         await rodar(
-          `UPDATE promotores SET ${atribuicoes},
+          `UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE,
              telefone = CASE WHEN $${COLUNAS.length + 1} <> '' THEN $${COLUNAS.length + 1} ELSE telefone END,
              observacao = CASE WHEN $${COLUNAS.length + 2} <> '' THEN $${COLUNAS.length + 2} ELSE observacao END
            WHERE id = $${COLUNAS.length + 3}`,
           [...valores, p.telefone, p.observacao, existente.id],
         );
-        Object.assign(existente, p, { agencia: valores[COLUNAS.indexOf('agencia')] });
+        Object.assign(existente, p, { agencia: valores[COLUNAS.indexOf('agencia')], cadastrado: true });
         contagem.promotoresAtualizados++;
       } else {
         const marcadores = [...COLUNAS, 'telefone', 'observacao'].map((_, i) => `$${i + 1}`).join(', ');
         const [criado] = await rodar(
-          `INSERT INTO promotores (${COLUNAS.join(', ')}, telefone, observacao) VALUES (${marcadores}) RETURNING *`,
+          `INSERT INTO promotores (${COLUNAS.join(', ')}, telefone, observacao, cadastrado) VALUES (${marcadores}, TRUE) RETURNING *`,
           [...valores, p.telefone, p.observacao],
         );
         cadastro.incluir(criado);
@@ -274,9 +320,12 @@ async function gravarPromotores(dados, usuario) {
   });
 }
 
-// ---------- Visitas ----------
-// Um registro por promotor + loja + mês. Se já existia, o novo SUBSTITUI o antigo.
-async function gravarVisitas(dados, usuario) {
+// ---------- Atendimentos (visitas) ----------
+// Importar substitui o MÊS INTEIRO das agências que o arquivo traz: antes de gravar, apaga todos os
+// atendimentos daqueles meses feitos pelos promotores dessas agências (guardando uma cópia).
+// É por agência, e não o mês de todo mundo, porque cada agência manda o próprio arquivo: importar o
+// arquivo da agência A não pode apagar o que veio no arquivo da agência B.
+function prepararVisitas(dados) {
   const registro = conferirEnvio(dados);
   const itens = dados.itens.map((item) => {
     const p = item.promotor || {};
@@ -297,16 +346,45 @@ async function gravarVisitas(dados, usuario) {
       observacao: texto(item.observacao, 400),
     };
   });
+  return { registro, itens, meses: [...new Set(itens.map((i) => i.mes))].sort() };
+}
+
+// Descobre o promotor de cada item (sem criar nada) e o "escopo" que será substituído:
+// meses do arquivo + agências do arquivo + promotores do arquivo.
+function escopoDasVisitas(itens, cadastro) {
+  const agencias = new Set();
+  const ids = new Set();
+  const encontrados = new Map(); // item.promotor -> promotor do banco (ou null)
+  for (const { promotor: p } of itens) {
+    if (encontrados.has(p)) continue;
+    const achado = p.id ? cadastro.porId.get(p.id) || null : cadastro.achar(p);
+    encontrados.set(p, achado);
+    // O promotor achado entra pelo id dele. As agências vêm SÓ do texto do arquivo: a agência que o promotor
+    // tem no banco pode ser de outra empresa (CLT achado pelo código), e não pode ter o mês apagado.
+    if (achado) ids.add(achado.id);
+    if (!p.id) agencias.add((p.agencia || 'Sem agência').toLowerCase());
+  }
+  return { agencias: [...agencias], ids: [...ids], encontrados };
+}
+
+const SQL_ESCOPO_VISITAS = `FROM visitas v WHERE v.mes = ANY($1::text[])
+  AND (v.promotor_id = ANY($2::int[]) OR v.promotor_id IN (SELECT p.id FROM promotores p WHERE ${SQL_AGENCIA} = ANY($3::text[])))`;
+
+async function gravarVisitas(dados, usuario) {
+  const { registro, itens, meses } = prepararVisitas(dados);
 
   return transacao(async (rodar) => {
     const contagem = { lojasNovas: 0, promotoresNovos: 0 };
     const lojas = await resolverLojas(rodar, itens, contagem);
     const importacaoId = await registrarImportacao(rodar, 'visitas', dados.arquivo, usuario);
     const cadastro = await carregarPromotores(rodar);
+    const escopo = escopoDasVisitas(itens, cadastro);
 
+    // Promotor de cada item: o que já existe ou um novo. Conta quem veio com código e não achou cadastro.
+    const codigosSemCadastro = new Set();
     const promotores = new Map();
     const acharPromotor = async (p) => {
-      const chave = p.id ? `id:${p.id}` : `${p.codigo}|${p.nome.toLowerCase()}|${p.agencia.toLowerCase()}`;
+      const chave = p.id ? `id:${p.id}` : `${codigoNormal(p.codigo)}|${p.nome.toLowerCase()}|${p.agencia.toLowerCase()}`;
       if (promotores.has(chave)) return promotores.get(chave);
       let id;
       if (p.id) {
@@ -314,8 +392,15 @@ async function gravarVisitas(dados, usuario) {
         id = p.id;
       } else {
         const existente = cadastro.achar(p);
-        if (existente) id = existente.id;
-        else {
+        if (p.codigo && !(existente && existente.cadastrado)) codigosSemCadastro.add(`${codigoNormal(p.codigo)}|${primeiroNome(p.nome)}`);
+        if (existente) {
+          id = existente.id;
+          // Promotor que veio só do cadastro (sem agência): passa a ter a agência da planilha de atendimentos.
+          if (!existente.agencia && p.agencia) {
+            await rodar('UPDATE promotores SET agencia = $1 WHERE id = $2', [p.agencia, id]);
+            existente.agencia = p.agencia;
+          }
+        } else {
           const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia, codigo) VALUES ($1, $2, $3, $4) RETURNING *', [p.nome, p.tipo, p.agencia, p.codigo]);
           cadastro.incluir(criado);
           id = criado.id;
@@ -338,28 +423,132 @@ async function gravarVisitas(dados, usuario) {
       for (const campo of ['dias', 'status', 'supervisor', 'observacao']) soma[campo] = soma[campo] || item[campo];
     }
     const registros = [...somas.values()];
-    for (const registro of registros) {
-      if (registro.custo !== null) registro.custo = conferirTotal(registro.custo);
-      if (registro.visitas > 100000) throw new ErroDeImportacao('Quantidade de visitas grande demais. Confira a coluna de visitas.');
+    for (const r of registros) {
+      if (r.custo !== null) r.custo = conferirTotal(r.custo);
+      if (r.visitas > 100000) throw new ErroDeImportacao('Quantidade de visitas grande demais. Confira a coluna de visitas.');
     }
+
+    // Cópia do que vai ser substituído e apaga o mês inteiro das agências do arquivo.
+    const ids = [...new Set([...escopo.ids, ...promotores.values()])];
+    const parametros = [meses, ids, escopo.agencias];
+    const antigas = await rodar(`SELECT v.* ${SQL_ESCOPO_VISITAS}`, parametros);
+    await guardarCopia(rodar, importacaoId, 'visitas', antigas);
+    await rodar(`DELETE ${SQL_ESCOPO_VISITAS}`, parametros);
+
     for (let i = 0; i < registros.length; i += LOTE) {
       const lote = registros.slice(i, i + LOTE);
       await rodar(
         `INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita, status, supervisor, observacao, importacao_id)
          SELECT promotor_id, loja_id, mes, qtd, custo, dias, status, supervisor, observacao, $10::int
          FROM unnest($1::int[], $2::int[], $3::text[], $4::int[], $5::numeric[], $6::text[], $7::text[], $8::text[], $9::text[])
-           AS t(promotor_id, loja_id, mes, qtd, custo, dias, status, supervisor, observacao)
-         ON CONFLICT (promotor_id, loja_id, mes) DO UPDATE
-           SET qtd_visitas = EXCLUDED.qtd_visitas, custo = EXCLUDED.custo, dias_visita = EXCLUDED.dias_visita, status = EXCLUDED.status,
-               supervisor = EXCLUDED.supervisor, observacao = EXCLUDED.observacao, importacao_id = EXCLUDED.importacao_id`,
+           AS t(promotor_id, loja_id, mes, qtd, custo, dias, status, supervisor, observacao)`,
         [lote.map((r) => r.promotorId), lote.map((r) => r.lojaId), lote.map((r) => r.mes), lote.map((r) => r.visitas), lote.map((r) => r.custo),
           lote.map((r) => r.dias), lote.map((r) => r.status), lote.map((r) => r.supervisor), lote.map((r) => r.observacao), importacaoId],
       );
     }
-    const resultado = montarResultado(registros, registro, contagem, 'custo');
+    if (codigosSemCadastro.size) registro.avisos['Promotor com código que não está no cadastro (sem salário para calcular o custo)'] = codigosSemCadastro.size;
+    const resultado = montarResultado(registros, registro, { ...contagem, substituidas: antigas.length }, 'custo');
     await fecharImportacao(rodar, importacaoId, resultado);
     return resultado;
   });
 }
 
-module.exports = { gravarFaturamento, gravarVisitas, gravarPromotores, ErroDeImportacao };
+// ---------- Prévia: o que a importação vai substituir ----------
+// Chamada antes de gravar, com os mesmos dados. Não grava nada. Devolve a mensagem para a pessoa confirmar.
+async function previaDaImportacao(dados) {
+  const tipo = dados && dados.tipo;
+  if (tipo === 'faturamento') {
+    const { pares } = prepararFaturamento(dados);
+    const atuais = await escopoDoFaturamento(consulta, pares, 'f.mes, f.empresa');
+    const linhas = pares.map((par) => ({
+      ...par, registros: atuais.filter((a) => a.mes === par.mes && a.empresa === par.empresa).length,
+    }));
+    return {
+      linhas,
+      mensagem: linhas.map((l) => `Isto vai substituir todo o mês ${rotuloMes(l.mes)}${l.empresa ? ` da empresa ${l.empresa}` : ''} (${l.registros} registros atuais).`).join('\n'),
+    };
+  }
+  if (tipo === 'visitas') {
+    const { itens, meses } = prepararVisitas(dados);
+    const escopo = escopoDasVisitas(itens, await carregarPromotores(consulta));
+    const atuais = await consulta(`SELECT v.mes, count(*)::int AS n ${SQL_ESCOPO_VISITAS} GROUP BY v.mes`, [meses, escopo.ids, escopo.agencias]);
+    const linhas = meses.map((mes) => ({ mes, registros: (atuais.find((a) => a.mes === mes) || { n: 0 }).n }));
+    const agencias = [...new Set(itens.filter((i) => !i.promotor.id).map((i) => i.promotor.agencia || 'Sem agência'))];
+    const quem = agencias.length ? (agencias.length > 3 ? `das ${agencias.length} agências do arquivo` : `da(s) agência(s) ${agencias.join(', ')}`) : 'do promotor escolhido';
+    return {
+      linhas,
+      mensagem: linhas.map((l) => `Isto vai substituir todo o mês ${rotuloMes(l.mes)} ${quem} (${l.registros} registros atuais, inclusive os lançados à mão na tela).`).join('\n'),
+    };
+  }
+  if (tipo === 'promotores') {
+    const { itens } = prepararPromotores(dados);
+    const cadastro = await carregarPromotores(consulta);
+    const atualizados = itens.filter((p) => cadastro.achar(p)).length;
+    return {
+      linhas: [],
+      mensagem: `Isto vai atualizar ${atualizados} promotor(es) já cadastrado(s) (salário e adicionais passam a ser os do arquivo) e criar ${itens.length - atualizados} novo(s). A importação do cadastro não pode ser desfeita.`,
+    };
+  }
+  throw new ErroDeImportacao('Tipo de importação inválido.');
+}
+
+// ---------- Desfazer ----------
+// Só a importação mais recente de cada mês (e tipo) pode ser desfeita: desfazer uma mais antiga
+// restauraria dados por cima de uma importação mais nova.
+const mesesDe = (imp) => String(imp.meses || '').split(', ').filter(Boolean);
+
+function motivoParaNaoDesfazer(imp, todas) {
+  if (imp.tipo === 'promotores') return 'A importação do cadastro de promotores não pode ser desfeita. Corrija o promotor na tela ou importe o cadastro de novo.';
+  const meses = new Set(mesesDe(imp));
+  const maisNova = todas.find((o) => o.id > imp.id && o.tipo === imp.tipo && mesesDe(o).some((m) => meses.has(m)));
+  if (maisNova) return 'Só dá para desfazer a importação mais recente de cada mês. Desfaça antes as importações mais novas desses meses.';
+  return '';
+}
+
+async function listarImportacoes() {
+  const todas = await consulta('SELECT * FROM importacoes ORDER BY id DESC');
+  return todas.slice(0, 30).map((imp) => {
+    const motivo = motivoParaNaoDesfazer(imp, todas);
+    return { ...imp, podeDesfazer: !motivo, motivoNaoDesfaz: motivo };
+  });
+}
+
+class NaoEncontrado extends Error {}
+
+// Apaga o que a importação gravou e restaura o que ela tinha substituído, numa transação só.
+async function desfazerImportacao(id) {
+  return transacao(async (rodar) => {
+    const [imp] = await rodar('SELECT * FROM importacoes WHERE id = $1 FOR UPDATE', [id]);
+    if (!imp) throw new NaoEncontrado('Importação não encontrada.');
+    const motivo = motivoParaNaoDesfazer(imp, await rodar('SELECT id, tipo, meses FROM importacoes'));
+    if (motivo) throw new ErroDeImportacao(motivo);
+    const tabela = { faturamento: 'faturamento_erp', visitas: 'visitas' }[imp.tipo];
+    const apagados = await rodar(`DELETE FROM ${tabela} WHERE importacao_id = $1 RETURNING 1`, [id]);
+    const [copia] = await rodar('SELECT dados FROM importacoes_backup WHERE importacao_id = $1 AND tabela = $2', [id, tabela]);
+    let restaurados = [];
+    if (copia) {
+      // A importação de origem das linhas restauradas pode ter sido apagada: nesse caso fica sem origem.
+      restaurados = imp.tipo === 'faturamento'
+        ? await rodar(
+          `INSERT INTO faturamento_erp (cnpj, mes, empresa, valor, importacao_id)
+           SELECT r.cnpj, r.mes, r.empresa, r.valor, (SELECT i.id FROM importacoes i WHERE i.id = r.importacao_id)
+           FROM jsonb_to_recordset($1::jsonb) AS r(cnpj text, mes text, empresa text, valor numeric, importacao_id int)
+           ON CONFLICT DO NOTHING RETURNING 1`, [JSON.stringify(copia.dados)])
+        : await rodar(
+          `INSERT INTO visitas (id, promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita, status, supervisor, observacao, importacao_id)
+           SELECT r.id, r.promotor_id, r.loja_id, r.mes, r.qtd_visitas, r.custo, coalesce(r.dias_visita, ''), coalesce(r.status, ''),
+                  coalesce(r.supervisor, ''), coalesce(r.observacao, ''), (SELECT i.id FROM importacoes i WHERE i.id = r.importacao_id)
+           FROM jsonb_to_recordset($1::jsonb) AS r(id int, promotor_id int, loja_id int, mes text, qtd_visitas int, custo numeric,
+                dias_visita text, status text, supervisor text, observacao text, importacao_id int)
+           WHERE EXISTS (SELECT 1 FROM promotores p WHERE p.id = r.promotor_id) AND EXISTS (SELECT 1 FROM lojas l WHERE l.id = r.loja_id)
+           ON CONFLICT DO NOTHING RETURNING 1`, [JSON.stringify(copia.dados)]);
+    }
+    await rodar('DELETE FROM importacoes WHERE id = $1', [id]); // a cópia vai junto (ON DELETE CASCADE)
+    return { registros: apagados.length, restaurados: restaurados.length, semCopia: !imp.restauravel };
+  });
+}
+
+module.exports = {
+  gravarFaturamento, gravarVisitas, gravarPromotores, previaDaImportacao, listarImportacoes, desfazerImportacao,
+  ErroDeImportacao, NaoEncontrado,
+};

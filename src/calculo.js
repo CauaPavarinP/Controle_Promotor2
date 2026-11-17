@@ -5,7 +5,7 @@
 // e a sua parte do faturamento. Qualquer total (por promotor, agência, UF, loja ou geral) é só a soma das
 // linhas — por isso as somas sempre batem entre si, e um filtro (ex.: UF = SC) pega só a parte certa.
 
-const { normalizar, cnpjValido, ufDe } = require('../public/js/planilha-comum');
+const { normalizar, cnpjValido, ufDe, ehSupervisor } = require('../public/js/planilha-comum');
 
 const CAMPOS_CUSTO = ['salario', 'periculosidade', 'ajuda_celular', 'ajuda_custo', 'almoco', 'vale_transporte', 'gratificacao', 'outros_custos'];
 
@@ -13,6 +13,10 @@ const CAMPOS_CUSTO = ['salario', 'periculosidade', 'ajuda_celular', 'ajuda_custo
 function custoFixo(promotor) {
   return CAMPOS_CUSTO.reduce((soma, campo) => soma + (Number(promotor[campo]) || 0), 0);
 }
+
+// Custo fixo que entra no cálculo: supervisor não entra no custo dos promotores (o salário dele não é
+// custo de atendimento de loja).
+const custoFixoQueConta = (promotor) => (ehSupervisor(promotor.cargo) ? 0 : custoFixo(promotor));
 
 const arredondar = (valor) => (valor === null || valor === undefined ? valor : Math.round(valor * 100) / 100);
 
@@ -87,7 +91,7 @@ function custosDosAtendimentos(visitas, promotoresPorId) {
   const custos = new Map(); // id da visita -> { custo, origem }
   for (const grupo of grupos.values()) {
     const algumInformado = grupo.some((v) => v.custo !== null && v.custo !== undefined);
-    const fixo = custoFixo(promotoresPorId.get(grupo[0].promotor_id) || {});
+    const fixo = custoFixoQueConta(promotoresPorId.get(grupo[0].promotor_id) || {});
     const totalVisitas = grupo.reduce((soma, v) => soma + (v.qtd_visitas || 0), 0);
     for (const v of grupo) {
       if (v.custo !== null && v.custo !== undefined) custos.set(v.id, { custo: Number(v.custo), origem: 'planilha' });
@@ -160,6 +164,7 @@ function analisar({ promotores, lojas, visitas, faturamentos, clientes = [], mes
       cnpj, temCnpj: Boolean(cnpj), lojasDoCnpj, promotoresNaLoja,
       dias: v.dias_visita || '', supervisor: v.supervisor || '', status: v.status || '',
       promotorNome: promotor.nome, tipo: promotor.tipo, agencia: agenciaDe(promotor),
+      codigo: promotor.codigo || '', cadastrado: Boolean(promotor.cadastrado), cargo: promotor.cargo || '',
       lojaNome: loja.nome, cidade: loja.cidade || '', uf: ufDe(loja.uf) || loja.uf || '',
     };
   });
@@ -187,7 +192,7 @@ function analisar({ promotores, lojas, visitas, faturamentos, clientes = [], mes
   if (!temFiltroDeLoja(filtros)) {
     const atendeuNoMes = new Set(visitas.map((v) => `${v.promotor_id}|${v.mes}`));
     for (const promotor of promotores) {
-      const fixo = custoFixo(promotor);
+      const fixo = custoFixoQueConta(promotor); // supervisor fica fora (custo zero aqui)
       if (promotor.ativo === false || fixo <= 0) continue;
       if (!promotorPassa({ agencia: agenciaDe(promotor), tipo: promotor.tipo }, filtros)) continue;
       for (const mes of meses) {
@@ -332,6 +337,15 @@ function avisosDe(analise) {
       [...divididos].map(([cnpj, ls]) => `${cnpjFormatado(cnpj)}: ${[...new Set(ls.map((l) => l.lojaNome))].join(', ')}`)));
   }
 
+  // Atendimentos com código de promotor que não acharam ninguém no cadastro: o código ou o primeiro nome
+  // não bate com a planilha de cadastro. Sem cadastro, não há salário para calcular o custo (CLT).
+  const semCadastro = agrupar(linhas.filter((l) => l.codigo && !l.cadastrado), (l) => l.promotorId);
+  if (semCadastro.size) {
+    avisos.push(aviso('codigo_sem_cadastro', 'Código de promotor sem cadastro',
+      `${semCadastro.size} promotor(es) dos atendimentos têm código, mas não foram encontrados no cadastro de promotores (o código ou o primeiro nome não bate). Sem cadastro não há salário: o custo deles fica "não informado" quando a planilha não traz o valor.`,
+      [...semCadastro.values()].map((ls) => `${ls[0].agencia} — ${ls[0].promotorNome} (código ${ls[0].codigo}): ${new Set(ls.map((l) => l.lojaId)).size} loja(s)`)));
+  }
+
   if (semLoja.length) {
     const porPromotor = agrupar(semLoja, (s) => s.promotorId);
     const total = semLoja.reduce((s, x) => s + x.custo, 0);
@@ -343,6 +357,6 @@ function avisosDe(analise) {
 }
 
 module.exports = {
-  CAMPOS_CUSTO, FILTROS_DE_LOJA, custoFixo, percentual, arredondar, mesesEntre, agenciaDe,
+  CAMPOS_CUSTO, FILTROS_DE_LOJA, custoFixo, custoFixoQueConta, percentual, arredondar, mesesEntre, agenciaDe,
   limparFiltros, temFiltroDeLoja, temAlgumFiltro, linhaPassa, promotorPassa, analisar, somar, agrupar, avisosDe,
 };
