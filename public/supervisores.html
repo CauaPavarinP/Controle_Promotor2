@@ -28,12 +28,17 @@
           <label class="caixa"><input type="checkbox" id="f-pendencias"> Só pendências</label>
           <span class="contagem" id="contagem-sup" aria-live="polite"></span>
         </div>
-        <div class="rolagem">
-          <table>
-            <thead><tr><th>Supervisor</th><th>Código</th><th>Promotores</th><th>Agências</th><th class="num">Lojas</th><th></th></tr></thead>
-            <tbody id="linhas"></tbody>
-          </table>
-        </div>
+        <table class="tabela-sup">
+          <thead id="cabecalho-sup"><tr>
+            <th data-ordem="nome">Supervisor</th>
+            <th data-ordem="codigo">Código</th>
+            <th class="num" data-ordem="promotores" title="Promotores diferentes com pelo menos um atendimento ligado a este supervisor no período. Um promotor pode estar em mais de um supervisor, por isso a soma desta coluna pode passar do total de promotores.">Promotores <span class="info" aria-hidden="true">ⓘ</span></th>
+            <th class="num" data-ordem="agencias" title="Agências diferentes desses atendimentos">Agências</th>
+            <th class="num" data-ordem="lojas" title="Lojas diferentes desses atendimentos">Lojas</th>
+            <th><span class="sr-only">Ações</span></th>
+          </tr></thead>
+          <tbody id="linhas"></tbody>
+        </table>
       </div>
       <div class="painel" id="painel-sem-supervisor" hidden>
         <h2>Promotores sem supervisor no período</h2>

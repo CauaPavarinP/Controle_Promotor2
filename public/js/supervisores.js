@@ -61,6 +61,11 @@ const promotorHtml = (p) => `<a href="/promotor?id=${p.id}">${esc(p.nome)}</a> <
 
 // Filtros desta tela (só no navegador): busca por nome ou código, agência e "só pendências".
 const filtroTela = { busca: '', agencia: '', soPendencias: false };
+let ordem = () => ({ campo: 'nome', direcao: 1 }); // trocado pela ordenação do cabeçalho
+const VALOR_PARA_ORDENAR = {
+  nome: (s) => s.nome, codigo: (s) => s.codigo || '',
+  promotores: (s) => s.promotores.length, agencias: (s) => s.agencias.length, lojas: (s) => s.lojas,
+};
 
 function passaNoFiltro(s) {
   const busca = comparavel(filtroTela.busca);
@@ -99,7 +104,10 @@ async function carregar() {
 }
 
 function desenharTabela() {
-  const visiveis = dados.supervisores.filter(passaNoFiltro);
+  const { campo, direcao } = ordem();
+  const valor = VALOR_PARA_ORDENAR[campo] || VALOR_PARA_ORDENAR.nome;
+  const visiveis = dados.supervisores.filter(passaNoFiltro)
+    .sort((a, b) => comparar(valor(a), valor(b), direcao) || a.nome.localeCompare(b.nome, 'pt-BR'));
   el('contagem-sup').textContent = visiveis.length === dados.supervisores.length
     ? plural(visiveis.length, 'supervisor', 'supervisores')
     : `Mostrando ${visiveis.length} de ${plural(dados.supervisores.length, 'supervisor', 'supervisores')}`;
@@ -107,8 +115,8 @@ function desenharTabela() {
       <tr class="${abertos.has(s.id) ? 'aberto' : ''}" data-linha="${s.id}">
         <td><strong>${esc(s.nome)}</strong><span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
         <td>${esc(s.codigo || '—')}</td>
-        <td>${botaoAbrir(s, s.promotores.length, 'os promotores')}</td>
-        <td>${botaoAbrir(s, s.agencias.length, 'as agências')}</td>
+        <td class="num">${botaoAbrir(s, s.promotores.length, 'os promotores')}</td>
+        <td class="num">${botaoAbrir(s, s.agencias.length, 'as agências')}</td>
         <td class="num">${s.lojas || '—'}</td>
         <td class="num">
           <button type="button" class="secundario pequeno" data-editar="${s.id}">Editar</button>
@@ -143,6 +151,7 @@ function abrirFormulario(s) {
   montarFiltros(opcoes, carregar);
   carregar();
 
+  ordem = ordenacaoNaTabela(el('cabecalho-sup'), desenharTabela, { campo: 'nome', direcao: 1 });
   el('novo').addEventListener('click', () => abrirFormulario(null));
   // Filtros desta tela: redesenham sem ir ao servidor.
   el('f-busca-sup').addEventListener('input', comAtraso(() => { filtroTela.busca = el('f-busca-sup').value; desenharTabela(); }, 150));

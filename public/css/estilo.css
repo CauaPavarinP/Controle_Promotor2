@@ -232,3 +232,10 @@ tr.detalhe-sup > td { background: #f7f9fb; padding: 4px 16px 16px; }
 .barra-tabela .contagem { margin-left: auto; padding-bottom: 8px; font-size: 13px; color: var(--texto-fraco); }
 button.link { all: unset; cursor: pointer; color: var(--principal); text-decoration: underline; font-size: 13px; }
 button.link:focus-visible { outline: 2px solid var(--principal); outline-offset: 2px; }
+/* Cabeçalho que fica no topo ao rolar a página; colunas de número estreitas e à direita. */
+.tabela-sup thead th { position: sticky; top: 0; z-index: 2; background: var(--painel); box-shadow: inset 0 -1px 0 var(--borda); }
+.tabela-sup td:first-child { min-width: 260px; }
+.tabela-sup th.num, .tabela-sup td.num { width: 1%; padding-left: 18px; }
+.tabela-sup td:nth-child(2) { width: 1%; white-space: nowrap; }
+.tabela-sup td:last-child, .tabela-sup th:last-child { width: 1%; white-space: nowrap; text-align: right; }
+.tabela-sup .info { color: var(--texto-fraco); font-weight: 400; cursor: help; }
