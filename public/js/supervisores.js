@@ -7,6 +7,40 @@ let juntando = null; // supervisor que vai ser juntado a outro
 
 const abertos = new Set(); // supervisores com a lista aberta (continua aberta ao trocar o filtro)
 
+// ---------- Regras só de tela (não mudam nada no banco) ----------
+// Nome comparável: sem acento, minúsculo, sem pontuação e com um espaço só entre as palavras.
+const comparavel = (texto) => String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const plural = (n, um, varios) => `${n.toLocaleString('pt-BR')} ${n === 1 ? um : varios}`;
+// Nomes que não identificam uma pessoa (ex.: a palavra "Supervisor" escrita na coluna da planilha).
+const NOMES_GENERICOS = new Set(['supervisor', 'supervisora', 'supervisores', 'sup', 'nao definido', 'nao informado', 'sem supervisor', 'sem nome', 'outro', 'outros']);
+
+// Pendências que contam no card: sem código e nome genérico.
+function pendenciasDe(s) {
+  const lista = [];
+  if (!String(s.codigo || '').trim()) lista.push({ tipo: 'sem-codigo', texto: 'Sem código' });
+  if (NOMES_GENERICOS.has(comparavel(s.nome)) || comparavel(s.nome).length < 2) lista.push({ tipo: 'generico', texto: 'Nome genérico' });
+  return lista;
+}
+
+// Promotores diferentes que têm algum supervisor (o mesmo promotor pode estar em mais de um supervisor).
+const idsComSupervisor = (supervisores) => new Set(supervisores.flatMap((s) => s.promotores.map((p) => p.id)));
+
+function desenharCards() {
+  const lista = dados.supervisores;
+  const comPromotor = lista.filter((s) => s.promotores.length).length;
+  const pendentes = lista.filter((s) => pendenciasDe(s).length).length;
+  el('cards-sup').innerHTML = `
+    <div class="card"><div class="rotulo">Supervisores</div><div class="valor">${lista.length.toLocaleString('pt-BR')}</div>
+      <div class="detalhe">${plural(comPromotor, 'com promotor', 'com promotores')} no período</div></div>
+    <div class="card"><div class="rotulo">Promotores com supervisor</div><div class="valor">${idsComSupervisor(lista).size.toLocaleString('pt-BR')}</div>
+      <div class="detalhe">Cada promotor contado uma vez</div></div>
+    <div class="card"><div class="rotulo">Promotores sem supervisor</div><div class="valor">${dados.semSupervisor.length.toLocaleString('pt-BR')}</div>
+      <div class="detalhe"><a href="#painel-sem-supervisor">Ver a lista</a></div></div>
+    <div class="card ${pendentes ? 'atencao' : ''}"><div class="rotulo">Cadastros com pendência</div><div class="valor">${pendentes.toLocaleString('pt-BR')}</div>
+      <div class="detalhe">Sem código ou nome genérico</div></div>`;
+}
+
 // Botão com a quantidade. Ao clicar, abre a lista na linha de baixo, na largura da tabela.
 function botaoAbrir(s, quantidade, nome) {
   if (!quantidade) return '—';
@@ -30,6 +64,7 @@ async function carregar() {
     dados = await api(`/api/supervisores?${parametros(filtrosAtuais())}`);
     mostrarAviso(aviso, '');
     mostrarAvisos(dados.avisos);
+    desenharCards();
     el('linhas').innerHTML = dados.supervisores.map((s) => `
       <tr class="${abertos.has(s.id) ? 'aberto' : ''}" data-linha="${s.id}">
         <td><strong>${esc(s.nome)}</strong><span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
