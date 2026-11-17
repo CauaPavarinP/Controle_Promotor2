@@ -52,12 +52,24 @@ function chipAbrir(s, quantidade, um, varios) {
 const chipTexto = (quantidade, um, varios) => (quantidade
   ? `<span class="chip chip-texto">${plural(quantidade, um, varios)}</span>` : `<span class="chip chip-zero">0 ${varios}</span>`);
 
+// Linha que abre embaixo do supervisor: os promotores dele agrupados por agência (a com mais promotores primeiro),
+// com o número de lojas de cada um nos atendimentos ligados a este supervisor. Sem rolagem interna.
 function linhaDetalhe(s) {
+  const porAgencia = new Map();
+  for (const p of s.promotores) {
+    if (!porAgencia.has(p.agencia)) porAgencia.set(p.agencia, []);
+    porAgencia.get(p.agencia).push(p);
+  }
+  const grupos = [...porAgencia.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], 'pt-BR'));
   return `<tr class="detalhe-sup" id="detalhe-${s.id}" ${abertos.has(s.id) ? '' : 'hidden'}><td colspan="6">
-    <div class="detalhe-sup-titulo">Promotores de ${esc(s.nome)} (${s.promotores.length})</div>
-    <ul class="grade-nomes">${s.promotores.map((p) => `<li>${promotorHtml(p)}</li>`).join('')}</ul>
-    <div class="detalhe-sup-titulo">Agências (${s.agencias.length})</div>
-    <p class="detalhe-sup-agencias">${s.agencias.map(esc).join(' · ')}</p>
+    <div class="detalhe-sup-titulo">Promotores de ${esc(s.nome)} no período, por agência
+      <span class="menor-inline">· ${plural(s.promotores.length, 'promotor', 'promotores')} em ${plural(grupos.length, 'agência', 'agências')}</span></div>
+    <div class="grupos-agencia">${grupos.map(([agencia, promotores]) => `
+      <section class="grupo-agencia">
+        <h3>${esc(agencia)} <span class="menor-inline">${plural(promotores.length, 'promotor', 'promotores')}</span></h3>
+        <ul>${promotores.map((p) => `<li><a href="/promotor?id=${p.id}">${esc(p.nome)}</a><span class="lojas">${plural(p.lojas, 'loja', 'lojas')}</span></li>`).join('')}</ul>
+      </section>`).join('')}
+    </div>
   </td></tr>`;
 }
 const promotorHtml = (p) => `<a href="/promotor?id=${p.id}">${esc(p.nome)}</a> <span class="menor-inline">${esc(p.agencia)} · ${p.lojas} loja(s)</span>`;
