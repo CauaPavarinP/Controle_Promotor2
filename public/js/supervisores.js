@@ -5,9 +5,22 @@ let dados = null;
 let editando = null; // supervisor sendo editado (null = novo)
 let juntando = null; // supervisor que vai ser juntado a outro
 
-function lista(itens, rotulo) {
-  if (!itens.length) return '—';
-  return `<details><summary>${itens.length}</summary><ul class="lista-curta">${itens.map((i) => `<li>${rotulo(i)}</li>`).join('')}</ul></details>`;
+const abertos = new Set(); // supervisores com a lista aberta (continua aberta ao trocar o filtro)
+
+// Botão com a quantidade. Ao clicar, abre a lista na linha de baixo, na largura da tabela.
+function botaoAbrir(s, quantidade, nome) {
+  if (!quantidade) return '—';
+  return `<button type="button" class="botao-abrir" data-abrir="${s.id}" aria-expanded="${abertos.has(s.id)}" aria-controls="detalhe-${s.id}"
+    title="Ver ${nome} de ${esc(s.nome)}">${quantidade}</button>`;
+}
+
+function linhaDetalhe(s) {
+  return `<tr class="detalhe-sup" id="detalhe-${s.id}" ${abertos.has(s.id) ? '' : 'hidden'}><td colspan="6">
+    <div class="detalhe-sup-titulo">Promotores de ${esc(s.nome)} (${s.promotores.length})</div>
+    <ul class="grade-nomes">${s.promotores.map((p) => `<li>${promotorHtml(p)}</li>`).join('')}</ul>
+    <div class="detalhe-sup-titulo">Agências (${s.agencias.length})</div>
+    <p class="detalhe-sup-agencias">${s.agencias.map(esc).join(' · ')}</p>
+  </td></tr>`;
 }
 const promotorHtml = (p) => `<a href="/promotor?id=${p.id}">${esc(p.nome)}</a> <span class="menor-inline">${esc(p.agencia)} · ${p.lojas} loja(s)</span>`;
 
@@ -18,18 +31,18 @@ async function carregar() {
     mostrarAviso(aviso, '');
     mostrarAvisos(dados.avisos);
     el('linhas').innerHTML = dados.supervisores.map((s) => `
-      <tr>
+      <tr class="${abertos.has(s.id) ? 'aberto' : ''}" data-linha="${s.id}">
         <td><strong>${esc(s.nome)}</strong><span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
         <td>${esc(s.codigo || '—')}</td>
-        <td>${lista(s.promotores, promotorHtml)}</td>
-        <td>${lista(s.agencias, esc)}</td>
+        <td>${botaoAbrir(s, s.promotores.length, 'os promotores')}</td>
+        <td>${botaoAbrir(s, s.agencias.length, 'as agências')}</td>
         <td class="num">${s.lojas || '—'}</td>
         <td class="num">
           <button type="button" class="secundario pequeno" data-editar="${s.id}">Editar</button>
           <button type="button" class="secundario pequeno" data-juntar="${s.id}">Juntar</button>
           <button type="button" class="perigo pequeno" data-excluir="${s.id}">Excluir</button>
         </td>
-      </tr>`).join('') || '<tr><td colspan="6" class="vazio">Nenhum supervisor com promotor nestes filtros.</td></tr>';
+      </tr>${s.promotores.length ? linhaDetalhe(s) : ''}`).join('') || '<tr><td colspan="6" class="vazio">Nenhum supervisor com promotor nestes filtros.</td></tr>';
     el('painel-sem-supervisor').hidden = !dados.semSupervisor.length;
     el('sem-supervisor').innerHTML = dados.semSupervisor.map((p) => `<li>${promotorHtml(p)}</li>`).join('');
   } catch (erro) {
@@ -84,6 +97,16 @@ function abrirFormulario(s) {
   });
 
   el('linhas').addEventListener('click', async (evento) => {
+    const abrir = evento.target.closest('button[data-abrir]');
+    if (abrir) {
+      const id = Number(abrir.dataset.abrir);
+      const abrirAgora = !abertos.has(id);
+      if (abrirAgora) abertos.add(id); else abertos.delete(id);
+      el(`detalhe-${id}`).hidden = !abrirAgora;
+      document.querySelector(`tr[data-linha="${id}"]`).classList.toggle('aberto', abrirAgora);
+      for (const b of document.querySelectorAll(`button[data-abrir="${id}"]`)) b.setAttribute('aria-expanded', abrirAgora);
+      return;
+    }
     const editar = evento.target.closest('button[data-editar]');
     if (editar) return abrirFormulario(supervisor(editar.dataset.editar));
     const juntar = evento.target.closest('button[data-juntar]');
