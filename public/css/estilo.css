@@ -223,8 +223,9 @@ td details summary { cursor: pointer; color: var(--principal); font-weight: 600;
 tr.aberto > td { border-bottom-color: transparent; background: #f7f9fb; }
 tr.detalhe-sup > td { background: #f7f9fb; padding: 4px 16px 16px; }
 .detalhe-sup-titulo { font-size: 13px; font-weight: 600; color: var(--texto-fraco); margin: 8px 0 10px; }
-.grupos-agencia { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-items: start; }
-.grupo-agencia { background: var(--painel); border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; }
+.grupos-agencia { columns: 3 280px; column-gap: 12px; }
+.grupo-agencia { background: var(--painel); border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; break-inside: avoid; }
+.grupo-agencia h3 .menor-inline { white-space: nowrap; }
 .grupo-agencia h3 { font-size: 13.5px; margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
 .grupo-agencia ul { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }
 .grupo-agencia li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px dashed var(--borda); }
@@ -273,3 +274,38 @@ button.link:focus-visible { outline: 2px solid var(--principal); outline-offset:
 .tabela-sem tr.grupo-linha button.abrir { color: var(--texto); }
 .tabela-sem td:first-child { padding-left: 30px; }
 .tabela-sem .marca { margin-left: 6px; }
+/* Tela Supervisores no celular: cada supervisor vira um cartão (nome e ⋯ em cima, código, chips embaixo). */
+@media (max-width: 700px) {
+  #cards-sup { grid-template-columns: 1fr 1fr; gap: 10px; }
+  #cards-sup .card { padding: 12px; }
+  .barra-tabela .campo, .barra-tabela .campo.largo { flex: 1 1 100%; min-width: 0; max-width: none; }
+  .barra-tabela .contagem { margin-left: 0; padding-bottom: 0; }
+  .tabela-sup thead { display: none; }
+  .tabela-sup, .tabela-sup tbody { display: block; }
+  .tabela-sup tr[data-linha] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+  .tabela-sup tr[data-linha] > td { display: block; border: 0; padding: 0; width: auto; min-width: 0; text-align: left; }
+  .tabela-sup tr[data-linha] > td:first-child { flex: 1 1 calc(100% - 60px); order: 0; }
+  .tabela-sup tr[data-linha] > td.acoes-linha { order: 1; flex: 0 0 auto; }
+  .tabela-sup tr[data-linha] > td:nth-child(2) { order: 2; flex: 1 1 100%; font-size: 13px; color: var(--texto-fraco); }
+  .tabela-sup tr[data-linha] > td:nth-child(2)::before { content: 'Código: '; }
+  .tabela-sup tr[data-linha] > td.num { order: 3; }
+  .tabela-sup tr.aberto { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .tabela-sup tr.detalhe-sup { display: block; border: 1px solid var(--borda); border-top: 0; border-radius: 0 0 10px 10px; background: #f7f9fb; }
+  .tabela-sup tr.detalhe-sup[hidden] { display: none; }
+  .tabela-sup tr.detalhe-sup > td { display: block; border: 0; padding: 4px 10px 12px; }
+  .grupos-agencia { columns: 1; }
+  .tabela-sup { width: 100%; }
+  .tabela-sup tr.aberto > td { background: transparent; }
+  .tabela-sup tr.aberto { background: #f7f9fb; }
+  .detalhe-sup-titulo, .grupo-agencia, .grupo-agencia a { overflow-wrap: anywhere; min-width: 0; }
+  .grupo-agencia h3 { flex-wrap: wrap; }
+  .marcas { display: flex; margin: 4px 0 0; }
+  .tabela-sem th:nth-child(2), .tabela-sem td:nth-child(2) { display: none; }
+  .tabela-sem td:first-child { padding-left: 14px; }
+  .tabela-sem .marca { white-space: normal; }
+  .tabela-sem, .tabela-sem th, .tabela-sem td, .tabela-sem button.abrir { white-space: normal; overflow-wrap: anywhere; }
+  .tabela-sem th.num { width: 1%; }
+}
+/* A célula da lista aberta é a única da linha: não herda as regras da primeira e da última coluna. */
+.tabela-sup tr.detalhe-sup > td { white-space: normal; width: auto; min-width: 0; text-align: left; }
+#painel-sem-supervisor .ajuda { margin-bottom: 12px; }
