@@ -66,6 +66,16 @@
           <div class="botoes"><button type="button" class="secundario" id="juntar-cancelar">Cancelar</button><button type="submit">Juntar</button></div>
         </form>
       </dialog>
+      <dialog id="janela-excluir">
+        <form method="dialog">
+          <h2>Excluir supervisor</h2>
+          <div id="aviso-excluir" class="aviso" hidden></div>
+          <p>Excluir o supervisor <strong id="excluir-nome"></strong>?</p>
+          <p class="ajuda" id="excluir-detalhe"></p>
+          <p class="ajuda">Se for a mesma pessoa que outro supervisor, use <strong>Juntar</strong> em vez de excluir. A exclusão não tem como desfazer.</p>
+          <div class="botoes"><button type="button" class="secundario" id="excluir-cancelar">Cancelar</button><button type="submit" class="perigo">Excluir</button></div>
+        </form>
+      </dialog>
     </main>
   </div>
   <script src="/js/comum.js"></script>

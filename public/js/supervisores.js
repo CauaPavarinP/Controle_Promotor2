@@ -4,6 +4,7 @@ const el = (id) => document.getElementById(id);
 let dados = null;
 let editando = null; // supervisor sendo editado (null = novo)
 let juntando = null; // supervisor que vai ser juntado a outro
+let excluindo = null; // supervisor que vai ser excluído (janela de confirmação)
 
 const abertos = new Set(); // supervisores com a lista aberta (continua aberta ao trocar o filtro)
 
@@ -72,6 +73,36 @@ function linhaDetalhe(s) {
     </div>
   </td></tr>`;
 }
+// Menu "⋯" da linha: Editar, Juntar e Excluir (Excluir pede confirmação numa janela).
+const DICA_JUNTAR = 'Une dois cadastros que são a mesma pessoa (ex.: "Leo" e "Leonardo Silva"): os vínculos deste passam para o outro e este cadastro é apagado. Não dá para desfazer.';
+function menuAcoes(s) {
+  return `<div class="menu-acoes">
+    <button type="button" class="botao-mais" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-${s.id}" title="Ações">⋯<span class="sr-only">Ações de ${esc(s.nome)}</span></button>
+    <div class="menu-lista" role="menu" id="menu-${s.id}" hidden>
+      <button type="button" role="menuitem" data-editar="${s.id}">Editar<small>Nome e código</small></button>
+      <button type="button" role="menuitem" data-juntar="${s.id}" title="${esc(DICA_JUNTAR)}">Juntar com outro…<small>Mesma pessoa com dois cadastros</small></button>
+      <button type="button" role="menuitem" class="item-perigo" data-excluir="${s.id}">Excluir…<small>Os atendimentos ficam, sem o vínculo</small></button>
+    </div>
+  </div>`;
+}
+
+function fecharMenus(exceto = null) {
+  for (const botao of document.querySelectorAll('.botao-mais[aria-expanded="true"]')) {
+    if (botao === exceto) continue;
+    botao.setAttribute('aria-expanded', 'false');
+    el(botao.getAttribute('aria-controls')).hidden = true;
+  }
+}
+
+function alternarMenu(botao) {
+  const abrir = botao.getAttribute('aria-expanded') !== 'true';
+  fecharMenus(botao);
+  botao.setAttribute('aria-expanded', String(abrir));
+  const lista = el(botao.getAttribute('aria-controls'));
+  lista.hidden = !abrir;
+  if (abrir) lista.querySelector('[role="menuitem"]').focus();
+}
+
 const promotorHtml = (p) => `<a href="/promotor?id=${p.id}">${esc(p.nome)}</a> <span class="menor-inline">${esc(p.agencia)} · ${p.lojas} loja(s)</span>`;
 
 // Filtros desta tela (só no navegador): busca por nome ou código, agência e "só pendências".
@@ -133,11 +164,7 @@ function desenharTabela() {
         <td class="num">${chipAbrir(s, s.promotores.length, 'promotor', 'promotores')}</td>
         <td class="num">${chipAbrir(s, s.agencias.length, 'agência', 'agências')}</td>
         <td class="num">${chipTexto(s.lojas, 'loja', 'lojas')}</td>
-        <td class="num">
-          <button type="button" class="secundario pequeno" data-editar="${s.id}">Editar</button>
-          <button type="button" class="secundario pequeno" data-juntar="${s.id}">Juntar</button>
-          <button type="button" class="perigo pequeno" data-excluir="${s.id}">Excluir</button>
-        </td>
+        <td class="acoes-linha">${menuAcoes(s)}</td>
       </tr>${s.promotores.length ? linhaDetalhe(s) : ''}`).join('')
     || `<tr><td colspan="6" class="vazio">${dados.supervisores.length ? 'Nenhum supervisor com essa busca ou filtro.' : 'Nenhum supervisor com promotor nestes filtros.'}</td></tr>`;
 }
@@ -216,6 +243,9 @@ function abrirFormulario(s) {
       for (const b of document.querySelectorAll(`button[data-abrir="${id}"]`)) b.setAttribute('aria-expanded', abrirAgora);
       return;
     }
+    const mais = evento.target.closest('.botao-mais');
+    if (mais) return alternarMenu(mais);
+    fecharMenus();
     const editar = evento.target.closest('button[data-editar]');
     if (editar) return abrirFormulario(supervisor(editar.dataset.editar));
     const juntar = evento.target.closest('button[data-juntar]');
@@ -231,13 +261,33 @@ function abrirFormulario(s) {
     }
     const excluir = evento.target.closest('button[data-excluir]');
     if (!excluir) return;
-    const s = supervisor(excluir.dataset.excluir);
-    if (!confirm(`Excluir o supervisor "${s.nome}"? Os atendimentos não mudam, só perdem o vínculo com ele. Se for a mesma pessoa que outro supervisor, use "Juntar".`)) return;
+    excluindo = supervisor(excluir.dataset.excluir);
+    el('excluir-nome').textContent = excluindo.nome;
+    el('excluir-detalhe').textContent = excluindo.promotores.length
+      ? `Hoje ele está ligado a ${plural(excluindo.promotores.length, 'promotor', 'promotores')} neste período. Esses atendimentos continuam no sistema, só perdem o vínculo com este supervisor.`
+      : 'Ele não tem promotores neste período.';
+    mostrarAviso(el('aviso-excluir'), '');
+    el('janela-excluir').showModal();
+  });
+
+  // Menu "⋯": fecha ao clicar fora ou com Esc (volta o foco para o botão).
+  document.addEventListener('click', (evento) => { if (!evento.target.closest('.menu-acoes')) fecharMenus(); });
+  document.addEventListener('keydown', (evento) => {
+    if (evento.key !== 'Escape') return;
+    const aberto = document.querySelector('.botao-mais[aria-expanded="true"]');
+    if (aberto) { fecharMenus(); aberto.focus(); }
+  });
+
+  el('excluir-cancelar').addEventListener('click', () => el('janela-excluir').close());
+  el('janela-excluir').querySelector('form').addEventListener('submit', async (evento) => {
+    evento.preventDefault();
     try {
-      await api(`/api/supervisores/${s.id}`, { method: 'DELETE' });
+      await api(`/api/supervisores/${excluindo.id}`, { method: 'DELETE' });
+      el('janela-excluir').close();
+      mostrarAviso(el('aviso'), `Supervisor "${excluindo.nome}" excluído.`, 'ok');
       depoisDeMudar();
     } catch (erro) {
-      mostrarAviso(el('aviso'), erro.message);
+      mostrarAviso(el('aviso-excluir'), erro.message);
     }
   });
 })();
