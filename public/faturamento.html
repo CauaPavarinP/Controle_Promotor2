@@ -18,24 +18,27 @@
         </div>
       </div>
       <div class="painel">
-        <div class="filtros">
-          <div class="campo"><label for="periodo-de">De</label><select id="periodo-de"></select></div>
-          <div class="campo"><label for="periodo-ate">Até</label><select id="periodo-ate"></select></div>
+        <div class="filtros" id="filtros-comuns"></div>
+        <div class="filtros linha-extra">
           <div class="campo largo"><label for="busca">Buscar loja, cidade ou CNPJ</label><input id="busca" type="search" autocomplete="off"></div>
-          <div class="campo"><label for="empresa">Empresa</label><select id="empresa"><option value="">Todas</option></select></div>
+          <div class="campo"><label for="empresa">Empresa (ERP)</label><select id="empresa"><option value="">Todas</option></select></div>
           <div class="campo"><label for="situacao">Situação</label>
             <select id="situacao">
               <option value="">Todas</option><option value="dentro">Dentro da meta</option><option value="fora">Fora da meta</option>
-              <option value="sem_faturamento">Sem faturamento</option><option value="sem_promotor">Sem promotor</option>
+              <option value="sem_faturamento">Sem faturamento</option><option value="falta_faturamento">Falta o faturamento</option>
+              <option value="custo_nao_informado">Custo não informado</option><option value="sem_cnpj">Sem CNPJ</option>
+              <option value="sem_atendimento_no_mes">Comprou sem atendimento</option><option value="sem_promotor">Sem promotor</option>
             </select>
           </div>
         </div>
+        <div class="etiquetas" id="etiquetas"></div>
       </div>
+      <div id="avisos"></div>
       <div id="aviso" class="aviso" hidden></div>
       <div class="painel">
         <div class="rolagem">
           <table>
-            <thead><tr><th>Loja</th><th>Cidade</th><th class="num">Faturamento</th><th class="num">Visitas</th><th class="num">Custo promotores</th><th class="num">% custo</th><th>Situação</th></tr></thead>
+            <thead><tr><th>Loja / cliente do ERP</th><th>Cidade</th><th class="num">Faturamento</th><th class="num">Visitas</th><th class="num">Custo promotores</th><th class="num">% custo</th><th>Situação</th></tr></thead>
             <tbody id="linhas"></tbody>
             <tfoot id="totais"></tfoot>
           </table>

@@ -8,8 +8,10 @@ Sistema web para saber se cada promotor **"se paga"**: o custo dele precisa ser 
 |------|----------|-----------|
 | Login | `/login` | Entrada com login e senha |
 | Resumo | `/resumo` | Cards do período: faturamento total, custo total dos promotores, % do custo sobre o faturamento e promotores dentro/fora da meta |
+| Lojas por UF | `/lojas-uf` | Botões por UF e tabela das lojas atendidas (supervisor, agência, promotor, CNPJ, loja, cidade, UF, visitas, valor de cada mês, total, custo, faturamento, % e situação). Ordena por coluna, oculta agências sem custo, exporta Excel e imprime |
+| Agências | `/agencias` | Se cada agência vale o que custa: cartões (faturamento, custo, % contra o limite) e tabela por agência que abre os promotores e, no promotor, as lojas. Exporta Excel (3 abas) |
 | Faturamento | `/faturamento` | Faturamento de cada loja com filtros (período, busca, empresa, situação), custo dos promotores na loja e exportação para Excel |
-| Ficha da loja | `/loja?id=...` | Abre ao clicar numa loja: faturamento mês a mês (por empresa), custo dos promotores, % e quem atende a loja |
+| Ficha da loja | `/loja?id=...` ou `/loja?cnpj=...` | Abre ao clicar numa linha do Faturamento. Loja atendida: faturamento do CNPJ e a parte da loja mês a mês, outras lojas do mesmo CNPJ, custo, % e promotores. Cliente do ERP sem atendimento: o faturamento do CNPJ mês a mês |
 | Promotores | `/promotores` | Lista com filtros (período, busca, tipo, agência, situação, cadastro). Clicar abre a ficha |
 | Ficha do promotor | `/promotor?id=...` | Cadastro completo (código, empresa, admissão, salário, periculosidade, ajuda celular, ajuda de custo/alimentação, almoço, vale-transporte, gratificação, outros), lojas que visita, dias de visita, visitas, custo, faturamento da loja e % |
 | Importar | `/importar` | Importa o faturamento (FoccoERP), os atendimentos (lojas visitadas e valor) e o cadastro de promotores (salários). Mostra as colunas para conferir antes de gravar |
@@ -18,18 +20,33 @@ Sistema web para saber se cada promotor **"se paga"**: o custo dele precisa ser 
 
 **Perfis:** `suporte` faz tudo e administra usuários; `usuario` faz tudo (importar, exportar, cadastrar), menos administrar usuários.
 
+**Filtros** (Resumo, Faturamento, Promotores, Lojas por UF e Agências): período **Acumulado** (de/até) ou **Um mês**, Agência, Tipo, UF, Supervisor, Município e Mercado (parte do nome da loja ou da rede). Os filtros escolhidos aparecem como etiquetas com ✕ e valem para todas as telas enquanto a aba estiver aberta.
+
+**Avisos de qualidade dos dados** aparecem no topo dessas telas quando os números estão incompletos: meses com atendimento sem faturamento do ERP, meses sem arquivo de atendimento, lojas que compraram em meses sem atendimento (com o valor que ficou fora do %), lojas sem o valor do mês, lojas sem CNPJ válido, CNPJs divididos entre lojas e promotores com salário sem loja lançada.
+
 ## Regras de cálculo
 
 Ficam todas em [`src/calculo.js`](src/calculo.js).
 
 1. **Meta:** `custo ÷ faturamento × 100` tem que ser **menor ou igual a 3%**. O número 3 vem da variável `META_PERCENTUAL`.
-2. **Custo do atendimento** (promotor + loja + mês):
-   - se a planilha de atendimentos trouxe o valor da loja, vale o valor da planilha (agências e MEIs);
-   - se não trouxe (caso dos CLTs), usa o **custo fixo mensal** do cadastro do promotor (salário + periculosidade + ajuda celular + ajuda de custo/alimentação + almoço + vale-transporte + gratificação + outros), dividido entre as lojas dele: na proporção das visitas ou, sem visitas informadas, em partes iguais.
-3. **Promotor com custo fixo e nenhuma loja lançada no mês:** o custo entra no **custo total** mesmo assim (o salário foi pago), com a situação *Sem lojas*. Ele **não entra no percentual geral do Resumo**, que compara só o custo dos atendimentos com loja contra o faturamento dessas lojas; o valor sem loja aparece separado no card. Vale só para os meses que já têm atendimentos importados, para promotores ativos e já admitidos naquele mês.
-4. **Faturamento do promotor:** soma do faturamento das lojas **nos meses em que ele as atendeu**.
-5. **Duas pessoas na mesma loja:** o faturamento da loja conta inteiro para cada uma. Na tela Faturamento, o custo da loja é a soma dos dois.
-6. **Situações:** *Dentro da meta*, *Fora da meta*, *Sem faturamento* (teve custo, mas a loja não faturou no mês, ou a loja está sem CNPJ e não liga com o Focco), *Sem lojas*, *Sem dados* e *Sem promotor* (loja que faturou sem atendimento).
+A unidade do cálculo é o **atendimento**: um promotor, numa loja, num mês. Cada atendimento tem o seu custo e a sua parte do faturamento, e todo total (por promotor, agência, UF, loja ou geral) é a soma deles. Por isso as somas batem entre si, e um filtro de UF, cidade ou loja pega só a parte do promotor nas lojas filtradas.
+
+2. **Custo do atendimento:**
+   - valor do mês informado na planilha de atendimentos: vale esse valor (agências, MEIs, freelancers);
+   - sem valor, e o promotor tem custo fixo no cadastro (CLT): o custo fixo mensal (salário + periculosidade + ajuda celular + ajuda de custo/alimentação + almoço + vale-transporte + gratificação + outros) é dividido entre as lojas dele no mês, pelas visitas ou, sem visitas informadas, em partes iguais;
+   - sem valor e sem cadastro: **custo não informado**. Não vira zero: fica fora do % (senão a loja pareceria dentro da meta).
+3. **Faturamento do atendimento:** o faturamento do ERP é guardado por **CNPJ** e dividido na hora do cálculo:
+   - o faturamento do CNPJ no mês é dividido **em partes iguais entre as lojas que usam aquele CNPJ no mês** (rede que compra pela matriz ou pelo CD);
+   - a parte da loja é dividida **em partes iguais entre os promotores que a atendem no mês**;
+   - **loja sem CNPJ válido fica com faturamento zero** (o custo dela pesa no %);
+   - **mês sem faturamento do ERP importado:** o faturamento aparece como "—" e o mês fica fora do %;
+   - o que o CNPJ comprou num mês **sem atendimento** não entra no % (aparece no aviso e, na tela Faturamento, como "Comprou sem atendimento").
+   Sem filtros, a soma das linhas da tela Faturamento é exatamente o faturamento do ERP no período.
+4. **Percentual:** compara só os atendimentos que têm custo conhecido e faturamento do mês importado.
+5. **Promotor com custo fixo e nenhuma loja lançada no mês:** o custo entra no **custo total** (o salário foi pago), com a situação *Sem lojas*, mas não no %. Vale só para os meses que já têm atendimentos importados, para promotores ativos e já admitidos; e não entra com filtro de UF, supervisor, município ou mercado.
+6. **Situações:** *Dentro da meta*, *Fora da meta*, *Sem faturamento* (o CNPJ não comprou no mês), *Sem CNPJ*, *Falta o faturamento* (mês sem ERP), *Custo não informado*, *Sem lojas*, *Sem promotor* (cliente do ERP sem atendimento), *Comprou sem atendimento*. Para agências: *Vale a pena*, *Não vale a pena*, *Falta o faturamento* e *Custo não informado*.
+
+Pode haver diferença de centavos entre um total e a soma das linhas, por arredondamento de cada linha.
 
 ## Importação
 
@@ -47,7 +64,7 @@ Ficam todas em [`src/calculo.js`](src/calculo.js).
 
 | Tipo | Arquivo | O que grava |
 |------|---------|-------------|
-| Faturamento | `.xls` do Gerador de Relatórios do FoccoERP | Faturamento por loja (CNPJ) + mês + empresa |
+| Faturamento | `.xls` do Gerador de Relatórios do FoccoERP | Faturamento por CNPJ + mês + empresa, e nome/cidade/UF do cliente. Linhas sem CNPJ são ignoradas |
 | Atendimentos | Aba **Atendimentos** do "Modelo de atendimento" (uma linha por loja atendida no mês) | Quem atende cada loja, dias de visita, visitas e valor do mês |
 | Cadastro de promotores | Aba **Promotores CLT** do mesmo modelo | Código, empresa, admissão, salário e adicionais de cada promotor |
 
@@ -60,6 +77,18 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **Promotor:** pelo **código + primeiro nome** (a planilha de atendimentos traz só o primeiro nome; o cadastro, o nome completo). Sem código, pelo **nome + agência**: dois "João" de agências diferentes são pessoas diferentes.
 - **Linha sem nome de promotor:** o "promotor" passa a ser a própria agência da linha.
 - **Texto no lugar de valor no cadastro** (ex.: "carro", "600 + 120m"): o sistema usa o primeiro número que aparecer (ou zero) e guarda o texto original na observação do promotor, para conferir.
+
+### Banco de dados
+
+| Tabela | O que guarda |
+|--------|--------------|
+| `faturamento_erp` | Faturamento do ERP por CNPJ + mês + empresa |
+| `clientes_erp` | Nome, cidade e UF de cada CNPJ do ERP |
+| `lojas` | Lojas atendidas. Identificadas pela `chave` (CNPJ + nome + cidade): lojas da mesma rede podem ter o mesmo CNPJ |
+| `visitas` | Atendimentos: promotor + loja + mês, visitas, valor, dias, status, supervisor |
+| `promotores`, `importacoes`, `usuarios` | Cadastro, histórico de importações e usuários |
+
+**Migração automática:** nas versões anteriores o faturamento ficava por loja (tabela `faturamento`). Ao iniciar, o sistema converte esses dados para `faturamento_erp` uma única vez, numa transação (se algo falhar, nada muda), e guarda uma cópia do formato antigo em `backup_faturamento_por_loja`. Lojas que só existiam por causa do faturamento (sem nenhum atendimento) viram clientes do ERP. Depois de conferir que está tudo certo, a tabela de cópia pode ser apagada.
 
 ## Tecnologias
 
@@ -94,7 +123,7 @@ Cada item do menu é uma página separada. Para a página nova não nascer vazia
 | `src/config.js` | Lê as variáveis de ambiente |
 | `src/db.js` | Conexão com o banco e criação das tabelas |
 | `src/auth.js` | Login, perfis e usuários |
-| `src/calculo.js` | As contas (custo, %, situação). Não acessa o banco |
+| `src/calculo.js` | As contas: monta os atendimentos, divide o faturamento, soma, situações e avisos. Não acessa o banco |
 | `src/relatorios.js` | Busca os dados do período e aplica os filtros das telas |
 | `public/js/planilha-comum.js` | Lê o arquivo aos poucos, reconhece as colunas e soma as linhas. Roda no navegador **e** no servidor |
 | `src/planilha.js` | Converte .xlsx em linhas e monta os arquivos de exportação |

@@ -18,30 +18,29 @@
         </div>
       </div>
       <div class="painel">
-        <div class="filtros">
-          <div class="campo"><label for="periodo-de">De</label><select id="periodo-de"></select></div>
-          <div class="campo"><label for="periodo-ate">Até</label><select id="periodo-ate"></select></div>
+        <div class="filtros" id="filtros-comuns"></div>
+        <div class="filtros linha-extra">
           <div class="campo largo"><label for="busca">Buscar por nome, agência ou código</label><input id="busca" type="search" autocomplete="off"></div>
-          <div class="campo"><label for="tipo">Tipo</label>
-            <select id="tipo"><option value="">Todos</option><option value="CLT">CLT</option><option value="MEI">MEI</option><option value="AGENCIA">Agência</option><option value="FREELANCER">Freelancer</option></select>
-          </div>
-          <div class="campo"><label for="agencia">Agência / empresa</label><select id="agencia"><option value="">Todas</option></select></div>
           <div class="campo"><label for="situacao">Situação</label>
             <select id="situacao">
               <option value="">Todas</option><option value="dentro">Dentro da meta</option><option value="fora">Fora da meta</option>
-              <option value="sem_faturamento">Sem faturamento</option><option value="sem_lojas">Sem lojas</option><option value="sem_dados">Sem dados</option>
+              <option value="sem_faturamento">Sem faturamento</option><option value="falta_faturamento">Falta o faturamento</option>
+              <option value="custo_nao_informado">Custo não informado</option><option value="sem_cnpj">Sem CNPJ</option>
+              <option value="sem_lojas">Sem lojas</option><option value="sem_dados">Sem dados</option>
             </select>
           </div>
           <div class="campo"><label for="ativo">Cadastro</label>
             <select id="ativo"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select>
           </div>
         </div>
+        <div class="etiquetas" id="etiquetas"></div>
       </div>
+      <div id="avisos"></div>
       <div id="aviso" class="aviso" hidden></div>
       <div class="painel">
         <div class="rolagem">
           <table>
-            <thead><tr><th>Promotor</th><th>Tipo</th><th class="num">Lojas</th><th class="num">Visitas</th><th class="num">Custo</th><th class="num">Faturamento das lojas</th><th class="num">% custo</th><th>Situação</th></tr></thead>
+            <thead><tr><th>Promotor</th><th>Tipo</th><th class="num">Lojas</th><th class="num">Visitas</th><th class="num">Custo</th><th class="num">Faturamento (parte dele)</th><th class="num">% custo</th><th>Situação</th></tr></thead>
             <tbody id="linhas"></tbody>
           </table>
         </div>

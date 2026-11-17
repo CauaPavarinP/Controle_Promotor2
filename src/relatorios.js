@@ -1,9 +1,13 @@
-// Busca os dados do período no banco e aplica as regras de cálculo (src/calculo.js).
+// Monta cada tela a partir do motor de cálculo (src/calculo.js): busca no banco tudo o que o período tem,
+// passa pelo "analisar" e agrupa as linhas de atendimento do jeito que a tela precisa.
 const config = require('./config');
 const { consulta } = require('./db');
-const { calcular, custoFixo, percentual, situacao, CAMPOS_CUSTO } = require('./calculo');
-const { mesValido } = require('./planilha');
+const calc = require('./calculo');
+const { mesValido, normalizar, cnpjValido, ufDe } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
+
+const { CAMPOS_CUSTO, custoFixo, agenciaDe, somar, agrupar } = calc;
+const meta = () => config.meta;
 
 function lerPeriodo(query) {
   const { de, ate } = query;
@@ -12,139 +16,338 @@ function lerPeriodo(query) {
   return { de, ate };
 }
 
-async function carregar({ de, ate }, empresa = '') {
-  const [promotores, lojas, visitas, faturamentos] = await Promise.all([
+const texto = (v) => String(v ?? '').trim();
+const contem = (valor, busca) => normalizar(valor).includes(busca);
+
+// Busca no banco tudo o que o período tem e devolve a análise (ver calculo.analisar).
+async function carregar({ de, ate }, filtros = {}, empresa = '') {
+  const [promotores, visitas, faturamentos, mesesErp, clientes] = await Promise.all([
     consulta('SELECT * FROM promotores'),
-    consulta('SELECT id, nome, cnpj, cidade, uf FROM lojas'),
-    consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
-    consulta("SELECT loja_id, mes, valor FROM faturamento WHERE mes BETWEEN $1 AND $2 AND ($3 = '' OR empresa = $3)", [de, ate, empresa]),
+    consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita, supervisor, status FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
+    consulta("SELECT cnpj, mes, sum(valor) AS valor FROM faturamento_erp WHERE mes BETWEEN $1 AND $2 AND ($3 = '' OR empresa = $3) GROUP BY cnpj, mes", [de, ate, texto(empresa)]),
+    consulta('SELECT DISTINCT mes FROM faturamento_erp WHERE mes BETWEEN $1 AND $2', [de, ate]),
+    consulta('SELECT c.cnpj, c.nome, c.cidade, c.uf FROM clientes_erp c WHERE EXISTS (SELECT 1 FROM faturamento_erp f WHERE f.cnpj = c.cnpj AND f.mes BETWEEN $1 AND $2)', [de, ate]),
   ]);
-  return { ...calcular({ promotores, lojas, visitas, faturamentos, meta: config.meta }), cadastro: promotores };
+  const lojas = await consulta('SELECT id, nome, cnpj, cidade, uf FROM lojas WHERE id = ANY($1::int[])', [[...new Set(visitas.map((v) => v.loja_id))]]);
+  const analise = calc.analisar({
+    promotores, lojas, visitas, faturamentos, clientes, mesesComErp: mesesErp.map((m) => m.mes), de, ate, filtros, meta: meta(),
+  });
+  return { ...analise, cadastro: promotores, lojasPorId: new Map(lojas.map((l) => [l.id, l])) };
 }
 
-const contem = (texto, busca) => String(texto || '').toLowerCase().includes(busca);
+const soma = (lista, campo) => lista.reduce((total, item) => total + (item[campo] || 0), 0);
+const arred = calc.arredondar;
 
+// Somas de um promotor: as linhas dele + o custo de meses sem loja lançada.
+function somarPromotor(linhas, semLoja) {
+  return somar(linhas || [], meta(), soma(semLoja || [], 'custo'));
+}
+
+// ---------- Resumo ----------
 async function resumo(query) {
-  return (await carregar(lerPeriodo(query))).resumo;
+  const a = await carregar(lerPeriodo(query), query, query.empresa);
+  const custoSemLoja = soma(a.semLoja, 'custo');
+  const total = somar(a.linhas, meta(), custoSemLoja);
+  const naoAlocado = soma(a.naoAlocado, 'valor');
+  const porPromotor = agrupar(a.linhas, (l) => l.promotorId);
+  const semLojaPor = agrupar(a.semLoja, (s) => s.promotorId);
+  const situacoes = [...new Set([...porPromotor.keys(), ...semLojaPor.keys()])]
+    .map((id) => somarPromotor(porPromotor.get(id), semLojaPor.get(id)).situacao);
+  const contar = (s) => situacoes.filter((x) => x === s).length;
+  return {
+    meta: meta(),
+    filtrado: calc.temAlgumFiltro(a.filtros),
+    // Faturamento total = parte das lojas atendidas + o que o ERP faturou sem atendimento no mês.
+    // Sem filtro, é exatamente o total do ERP no período. Sem nenhum mês do ERP importado: "—".
+    faturamentoTotal: a.mesesComErp.length ? arred((total.faturamento || 0) + naoAlocado) : null,
+    faturamentoAtendido: total.faturamento,
+    faturamentoSemAtendimento: arred(naoAlocado),
+    custoTotal: total.custo,
+    custoComLojas: total.custoDasLojas,
+    custoSemLojas: arred(custoSemLoja),
+    custoComparavel: total.custoComparavel,
+    faturamentoComparavel: total.faturamentoComparavel,
+    percentual: total.percentual,
+    situacao: total.situacao,
+    promotores: situacoes.length,
+    dentro: contar('dentro'),
+    fora: contar('fora') + contar('sem_faturamento'),
+    semLojas: contar('sem_lojas'),
+    custoNaoInformado: contar('custo_nao_informado'),
+    faltaFaturamento: contar('falta_faturamento') + contar('sem_cnpj'),
+    avisos: calc.avisosDe(a),
+  };
 }
 
-// Lojas com faturamento e/ou visitas no período.
+// ---------- Faturamento das lojas ----------
+// Uma linha por loja atendida (com a parte dela do faturamento) e uma por CNPJ do ERP que comprou sem
+// atendimento no mês. A soma das linhas, sem filtro, é o faturamento total do ERP no período.
+function linhasDeFaturamento(a) {
+  const lojas = [...agrupar(a.linhas, (l) => l.lojaId)].map(([id, ls]) => {
+    const s = somar(ls, meta());
+    const l = ls[0];
+    return {
+      tipo: 'loja', id, nome: l.lojaNome, cnpj: l.cnpj, cidade: l.cidade, uf: l.uf,
+      faturamento: s.faturamento, custo: s.custo, visitas: s.visitas, percentual: s.percentual, situacao: s.situacao,
+      qtdPromotores: new Set(ls.map((x) => x.promotorId)).size,
+      lojasDoCnpj: Math.max(...ls.map((x) => x.lojasDoCnpj)),
+      linhas: ls,
+    };
+  });
+  const clientes = [...agrupar(a.naoAlocado, (n) => n.cnpj)].map(([cnpj, ns]) => ({
+    tipo: 'cliente', id: null, nome: ns[0].cliente.nome, cnpj, cidade: ns[0].cliente.cidade, uf: ufDe(ns[0].cliente.uf) || ns[0].cliente.uf,
+    faturamento: arred(soma(ns, 'valor')), custo: null, visitas: 0, percentual: null,
+    situacao: ns[0].atendidoNoPeriodo ? 'sem_atendimento_no_mes' : 'sem_promotor',
+    qtdPromotores: 0, lojasDoCnpj: 0, linhas: [],
+  }));
+  return [...lojas, ...clientes];
+}
+
 async function faturamentoPorLoja(query) {
-  const { lojas } = await carregar(lerPeriodo(query), String(query.empresa || ''));
-  const busca = String(query.busca || '').trim().toLowerCase();
-  const buscaDigitos = busca.replace(/\D/g, '');
-  const filtradas = lojas
-    .filter((l) => !busca || contem(l.loja.nome, busca) || contem(l.loja.cidade, busca) || (buscaDigitos && contem(l.loja.cnpj, buscaDigitos)))
+  const a = await carregar(lerPeriodo(query), query, query.empresa);
+  const busca = normalizar(query.busca);
+  const digitos = texto(query.busca).replace(/\D/g, '');
+  const linhas = linhasDeFaturamento(a)
+    .filter((l) => !busca || contem(l.nome, busca) || contem(l.cidade, busca) || (digitos.length >= 3 && l.cnpj.includes(digitos)))
     .filter((l) => !query.situacao || l.situacao === query.situacao)
-    .sort((a, b) => b.faturamento - a.faturamento);
-  const soma = (campo) => Math.round(filtradas.reduce((s, l) => s + l[campo], 0) * 100) / 100;
-  return { meta: config.meta, lojas: filtradas, totais: { faturamento: soma('faturamento'), custo: soma('custo'), visitas: soma('visitas') } };
+    .sort((x, y) => (y.faturamento ?? -1) - (x.faturamento ?? -1) || x.nome.localeCompare(y.nome));
+  // Totais das linhas mostradas: o % vem das linhas de atendimento delas.
+  const t = somar(linhas.flatMap((l) => l.linhas), meta());
+  const fatClientes = soma(linhas.filter((l) => l.tipo === 'cliente'), 'faturamento');
+  const temFaturamento = linhas.some((l) => l.faturamento !== null);
+  return {
+    meta: meta(),
+    lojas: linhas.map(({ linhas: _, ...resto }) => resto),
+    totais: {
+      faturamento: temFaturamento ? arred((t.faturamento || 0) + fatClientes) : null,
+      custo: t.custo, visitas: t.visitas, percentual: t.percentual,
+    },
+    avisos: calc.avisosDe(a),
+  };
 }
 
-// Todos os promotores cadastrados, com os números do período (zerados para quem não teve visita).
+// ---------- Promotores ----------
 async function listaDePromotores(query) {
-  const { promotores, cadastro } = await carregar(lerPeriodo(query));
-  const calculados = new Map(promotores.map((p) => [p.promotor.id, p]));
-  const busca = String(query.busca || '').trim().toLowerCase();
-  const lista = cadastro
+  const a = await carregar(lerPeriodo(query), query, query.empresa);
+  const porPromotor = agrupar(a.linhas, (l) => l.promotorId);
+  const semLojaPor = agrupar(a.semLoja, (s) => s.promotorId);
+  const comFiltroDeLoja = calc.temFiltroDeLoja(a.filtros);
+  const busca = normalizar(query.busca);
+  const lista = a.cadastro
+    .filter((p) => calc.promotorPassa({ agencia: agenciaDe(p), tipo: p.tipo }, a.filtros))
+    // Com filtro de UF, cidade, supervisor ou mercado, só aparece quem atendeu ali.
+    .filter((p) => !comFiltroDeLoja || porPromotor.has(p.id))
     .map((p) => {
-      const c = calculados.get(p.id);
+      const ls = porPromotor.get(p.id) || [];
+      const s = somarPromotor(ls, semLojaPor.get(p.id));
       return {
-        id: p.id, nome: p.nome, tipo: p.tipo, agencia: p.agencia, empresa: p.empresa, codigo: p.codigo, ativo: p.ativo,
-        qtdLojas: c ? c.qtdLojas : 0,
-        visitas: c ? c.visitas : 0,
-        custo: c ? c.custo : 0,
-        faturamento: c ? c.faturamento : 0,
-        percentual: c ? c.percentual : null,
-        situacao: c ? c.situacao : 'sem_dados',
+        id: p.id, nome: p.nome, tipo: p.tipo, agencia: agenciaDe(p), empresa: p.empresa, codigo: p.codigo, ativo: p.ativo,
+        qtdLojas: new Set(ls.map((l) => l.lojaId)).size,
+        visitas: s.visitas, custo: s.custo, custoSemLoja: s.custoSemLoja, faturamento: s.faturamento,
+        percentual: s.percentual, situacao: s.situacao,
       };
     })
-    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || p.codigo === busca)
-    .filter((p) => !query.tipo || p.tipo === query.tipo)
-    .filter((p) => !query.agencia || p.agencia === query.agencia || p.empresa === query.agencia)
+    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || p.codigo === texto(query.busca))
     .filter((p) => !query.situacao || p.situacao === query.situacao)
     .filter((p) => !query.ativo || String(p.ativo) === query.ativo)
     // Primeiro quem mais estoura a meta; quem não tem percentual vai para o fim.
-    .sort((a, b) => (b.percentual ?? -1) - (a.percentual ?? -1) || a.nome.localeCompare(b.nome));
-  return { meta: config.meta, promotores: lista };
+    .sort((x, y) => (y.percentual ?? -1) - (x.percentual ?? -1) || (y.custo ?? -1) - (x.custo ?? -1) || x.nome.localeCompare(y.nome));
+  return { meta: meta(), promotores: lista, avisos: calc.avisosDe(a) };
 }
 
-async function detalheDoPromotor(id, query) {
-  const { promotores, cadastro } = await carregar(lerPeriodo(query));
-  const promotor = cadastro.find((p) => p.id === id);
-  if (!promotor) return null;
-  const c = promotores.find((p) => p.promotor.id === id);
+function resumoDaLoja(ls) {
+  const s = somar(ls, meta());
+  const l = ls[0];
   return {
-    meta: config.meta,
-    promotor: { ...promotor, custoFixo: custoFixo(promotor) },
-    visitas: c ? c.visitas : 0,
-    custo: c ? c.custo : 0,
-    faturamento: c ? c.faturamento : 0,
-    custoSemLoja: c ? c.custoSemLoja : 0,
-    percentual: c ? c.percentual : null,
-    situacao: c ? c.situacao : 'sem_dados',
-    lojas: c ? c.lojas : [],
+    loja: { id: l.lojaId, nome: l.lojaNome, cnpj: l.cnpj, cidade: l.cidade, uf: l.uf },
+    visitas: s.visitas, custo: s.custo, faturamento: s.faturamento, percentual: s.percentual, situacao: s.situacao,
+    dias: ls.find((x) => x.dias)?.dias || '',
+    lojasDoCnpj: Math.max(...ls.map((x) => x.lojasDoCnpj)),
   };
 }
 
-// Tudo sobre uma loja no período: faturamento mês a mês e os promotores que a atendem.
+// Ficha do promotor: só o período (os filtros de agência, UF etc. não se aplicam aqui).
+async function detalheDoPromotor(id, query) {
+  const a = await carregar(lerPeriodo(query));
+  const promotor = a.cadastro.find((p) => p.id === id);
+  if (!promotor) return null;
+  const ls = a.linhas.filter((l) => l.promotorId === id);
+  const s = somarPromotor(ls, a.semLoja.filter((x) => x.promotorId === id));
+  return {
+    meta: meta(),
+    promotor: { ...promotor, agencia: promotor.agencia, custoFixo: custoFixo(promotor) },
+    visitas: s.visitas, custo: s.custo, faturamento: s.faturamento, custoSemLoja: s.custoSemLoja,
+    percentual: s.percentual, situacao: s.situacao,
+    lojas: [...agrupar(ls, (l) => l.lojaId).values()].map((g) => ({
+      ...resumoDaLoja(g),
+      atendimentos: g.map((l) => ({
+        id: l.id, mes: l.mes, visitas: l.visitas, custo: arred(l.custo), origemCusto: l.origemCusto,
+        valorInformado: l.valorInformado, faturamento: arred(l.faturamento), promotoresNaLoja: l.promotoresNaLoja, lojasDoCnpj: l.lojasDoCnpj,
+      })),
+    })).sort((x, y) => (y.custo ?? -1) - (x.custo ?? -1)),
+  };
+}
+
+// Faturamento do ERP de um CNPJ, mês a mês e por empresa.
+async function faturamentoDoCnpj(cnpj, { de, ate }) {
+  const linhas = await consulta('SELECT mes, empresa, valor FROM faturamento_erp WHERE cnpj = $1 AND mes BETWEEN $2 AND $3 ORDER BY mes, empresa', [cnpj, de, ate]);
+  const porMes = new Map();
+  for (const f of linhas) {
+    if (!porMes.has(f.mes)) porMes.set(f.mes, { total: 0, empresas: [] });
+    porMes.get(f.mes).total += f.valor;
+    porMes.get(f.mes).empresas.push({ empresa: f.empresa, valor: f.valor });
+  }
+  return porMes;
+}
+
+// Ficha da loja atendida: a parte dela do faturamento (o CNPJ pode ser dividido com outras lojas),
+// o custo e os promotores, mês a mês.
 async function detalheDaLoja(id, query) {
   const periodo = lerPeriodo(query);
-  const [[loja], faturamentos, calculado] = await Promise.all([
-    consulta('SELECT id, nome, cnpj, cidade, uf, endereco FROM lojas WHERE id = $1', [id]),
-    consulta('SELECT mes, empresa, valor FROM faturamento WHERE loja_id = $1 AND mes BETWEEN $2 AND $3 ORDER BY mes, empresa', [id, periodo.de, periodo.ate]),
-    carregar(periodo),
-  ]);
+  const a = await carregar(periodo);
+  const [loja] = await consulta('SELECT id, nome, cnpj, cidade, uf, endereco FROM lojas WHERE id = $1', [id]);
   if (!loja) return null;
-
-  // Promotores que atendem a loja (cada um com as visitas, o custo e o faturamento dos meses em que atendeu).
-  const promotores = [];
-  const custoPorMes = new Map();
-  for (const p of calculado.promotores) {
-    const naLoja = p.lojas.find((l) => l.loja.id === id);
-    if (!naLoja) continue;
-    promotores.push({
-      id: p.promotor.id, nome: p.promotor.nome, tipo: p.promotor.tipo, agencia: p.promotor.agencia || p.promotor.empresa,
-      visitas: naLoja.visitas, dias: naLoja.dias, custo: naLoja.custo, faturamento: naLoja.faturamento,
-      percentual: naLoja.percentual, situacao: naLoja.situacao,
-    });
-    for (const at of naLoja.atendimentos) custoPorMes.set(at.mes, (custoPorMes.get(at.mes) || 0) + at.custo);
-  }
-  promotores.sort((a, b) => b.custo - a.custo);
-
-  // Uma linha por mês: faturamento (somando as empresas), custo dos promotores e o percentual do mês.
-  const meses = new Map();
-  const linhaDoMes = (mes) => {
-    if (!meses.has(mes)) meses.set(mes, { mes, faturamento: 0, custo: 0, empresas: [] });
-    return meses.get(mes);
-  };
-  for (const f of faturamentos) {
-    const linha = linhaDoMes(f.mes);
-    linha.faturamento += f.valor;
-    linha.empresas.push({ empresa: f.empresa, valor: f.valor });
-  }
-  for (const [mes, custo] of custoPorMes) linhaDoMes(mes).custo += custo;
-  const porMes = [...meses.values()].sort((a, b) => b.mes.localeCompare(a.mes)).map((m) => {
-    const faturamento = Math.round(m.faturamento * 100) / 100;
-    const custo = Math.round(m.custo * 100) / 100;
-    return {
-      ...m, faturamento, custo,
-      percentual: custo > 0 ? percentual(custo, faturamento) : null,
-      situacao: custo > 0 ? situacao(custo, faturamento, config.meta) : 'sem_promotor',
+  const ls = a.linhas.filter((l) => l.lojaId === id);
+  const s = somar(ls, meta());
+  const cnpj = cnpjValido(String(loja.cnpj || '')) ? loja.cnpj : '';
+  const fatCnpj = cnpj ? await faturamentoDoCnpj(cnpj, periodo) : new Map();
+  const porMesLinhas = agrupar(ls, (l) => l.mes);
+  const mesesComErp = new Set(a.mesesComErp);
+  const meses = a.meses.filter((m) => porMesLinhas.has(m) || fatCnpj.has(m)).reverse();
+  const porMes = meses.map((mes) => {
+    const doMes = porMesLinhas.get(mes) || [];
+    const cnpjNoMes = fatCnpj.get(mes);
+    const base = {
+      mes,
+      faturamentoCnpj: mesesComErp.has(mes) ? arred(cnpjNoMes ? cnpjNoMes.total : 0) : null,
+      empresas: cnpjNoMes ? cnpjNoMes.empresas : [],
+      lojasDoCnpj: doMes.length ? doMes[0].lojasDoCnpj : 0,
     };
+    if (!doMes.length) {
+      return { ...base, faturamento: null, custo: null, percentual: null, situacao: 'sem_atendimento_no_mes' };
+    }
+    const sm = somar(doMes, meta());
+    return { ...base, faturamento: sm.faturamento, custo: sm.custo, percentual: sm.percentual, situacao: sm.situacao };
   });
-
-  const total = calculado.lojas.find((l) => l.loja.id === id);
+  // Outras lojas que usaram o mesmo CNPJ no período (rede que compra pela matriz ou pelo CD).
+  const outras = cnpj ? [...agrupar(a.todas.filter((l) => l.cnpj === cnpj && l.lojaId !== id), (l) => l.lojaId).values()]
+    .map((g) => ({ id: g[0].lojaId, nome: g[0].lojaNome, cidade: g[0].cidade, uf: g[0].uf })) : [];
   return {
-    meta: config.meta,
-    loja,
-    faturamento: total ? total.faturamento : 0,
-    custo: total ? total.custo : 0,
-    visitas: total ? total.visitas : 0,
-    percentual: total && total.qtdPromotores ? total.percentual : null,
-    situacao: total ? total.situacao : 'sem_dados',
+    meta: meta(),
+    loja: { ...loja, uf: ufDe(loja.uf) || loja.uf, cnpj },
+    cnpjInformado: loja.cnpj || '',
+    faturamento: s.faturamento, custo: s.custo, visitas: s.visitas, percentual: s.percentual,
+    situacao: ls.length ? s.situacao : 'sem_dados',
     porMes,
-    promotores,
+    outrasLojasDoCnpj: outras,
+    promotores: [...agrupar(ls, (l) => l.promotorId).values()].map((g) => {
+      const sp = somar(g, meta());
+      return {
+        id: g[0].promotorId, nome: g[0].promotorNome, tipo: g[0].tipo, agencia: g[0].agencia,
+        dias: g.find((x) => x.dias)?.dias || '', visitas: sp.visitas, custo: sp.custo, faturamento: sp.faturamento,
+        percentual: sp.percentual, situacao: sp.situacao,
+      };
+    }).sort((x, y) => (y.custo ?? -1) - (x.custo ?? -1)),
+  };
+}
+
+// Ficha de um cliente do ERP (CNPJ) que não é uma loja atendida, ou que comprou em meses sem atendimento.
+async function detalheDoCliente(cnpj, query) {
+  const periodo = lerPeriodo(query);
+  const [cliente] = await consulta('SELECT cnpj, nome, cidade, uf FROM clientes_erp WHERE cnpj = $1', [cnpj]);
+  if (!cliente) return null;
+  const [fatCnpj, a] = await Promise.all([faturamentoDoCnpj(cnpj, periodo), carregar(periodo)]);
+  const doCnpj = a.todas.filter((l) => l.cnpj === cnpj);
+  const lojasPorMes = agrupar(doCnpj, (l) => l.mes);
+  const porMes = [...fatCnpj].sort((x, y) => y[0].localeCompare(x[0])).map(([mes, f]) => ({
+    mes, faturamento: arred(f.total), empresas: f.empresas,
+    lojasAtendidas: lojasPorMes.has(mes) ? new Set(lojasPorMes.get(mes).map((l) => l.lojaId)).size : 0,
+  }));
+  return {
+    cliente: { ...cliente, uf: ufDe(cliente.uf) || cliente.uf },
+    faturamento: arred(porMes.reduce((t, m) => t + m.faturamento, 0)),
+    porMes,
+    lojas: [...agrupar(doCnpj, (l) => l.lojaId).values()].map((g) => ({
+      id: g[0].lojaId, nome: g[0].lojaNome, cidade: g[0].cidade, uf: g[0].uf, meses: [...new Set(g.map((l) => l.mes))].sort(),
+    })),
+  };
+}
+
+// ---------- Lojas por UF ----------
+// Uma linha por promotor + loja, com o valor informado em cada mês do período.
+async function lojasPorUf(query) {
+  const a = await carregar(lerPeriodo(query), query, query.empresa);
+  // Botões de UF: quantas lojas cada UF tem com os OUTROS filtros (a UF escolhida não entra na conta).
+  const semUf = { ...a.filtros };
+  delete semUf.uf;
+  const contagem = new Map();
+  for (const l of a.todas.filter((x) => calc.linhaPassa(x, semUf))) {
+    if (!contagem.has(l.uf)) contagem.set(l.uf, new Set());
+    contagem.get(l.uf).add(l.lojaId);
+  }
+  const agenciasComCusto = new Set(a.linhas.filter((l) => l.custo !== null).map((l) => l.agencia));
+  const linhas = [...agrupar(a.linhas, (l) => `${l.promotorId}|${l.lojaId}`).values()].map((g) => {
+    const s = somar(g, meta());
+    const l = g[0];
+    const valores = {};
+    for (const x of g) if (x.valorInformado !== null) valores[x.mes] = arred((valores[x.mes] || 0) + x.valorInformado);
+    const informados = Object.values(valores);
+    return {
+      promotorId: l.promotorId, promotor: l.promotorNome, tipo: l.tipo, agencia: l.agencia,
+      supervisor: [...new Set(g.map((x) => x.supervisor).filter(Boolean))].join(', '),
+      lojaId: l.lojaId, loja: l.lojaNome, cnpj: l.cnpj, cidade: l.cidade, uf: l.uf,
+      visitas: s.visitas, valores, total: informados.length ? arred(informados.reduce((t, v) => t + v, 0)) : null,
+      custo: s.custo, faturamento: s.faturamento, percentual: s.percentual, situacao: s.situacao,
+      agenciaTemCusto: agenciasComCusto.has(l.agencia),
+    };
+  }).sort((x, y) => x.uf.localeCompare(y.uf) || x.agencia.localeCompare(y.agencia) || x.loja.localeCompare(y.loja));
+  return {
+    meta: meta(),
+    meses: a.meses,
+    ufs: [...contagem].map(([uf, lojas]) => ({ uf: uf || '', lojas: lojas.size })).sort((x, y) => x.uf.localeCompare(y.uf)),
+    linhas,
+    avisos: calc.avisosDe(a),
+  };
+}
+
+// ---------- Agências ----------
+// A agência "vale o que custa" quando o custo do atendimento fica até a meta do faturamento das lojas dela.
+const SITUACAO_DA_AGENCIA = {
+  dentro: 'vale', fora: 'nao_vale', sem_faturamento: 'nao_vale',
+  falta_faturamento: 'falta_faturamento', sem_cnpj: 'falta_faturamento', custo_nao_informado: 'custo_nao_informado',
+};
+
+async function agencias(query) {
+  const a = await carregar(lerPeriodo(query), query, query.empresa);
+  const total = somar(a.linhas, meta());
+  const lista = [...agrupar(a.linhas, (l) => l.agencia)].map(([nome, ls]) => {
+    const s = somar(ls, meta());
+    const promotores = [...agrupar(ls, (l) => l.promotorId).values()].map((g) => {
+      const sp = somar(g, meta());
+      return {
+        id: g[0].promotorId, nome: g[0].promotorNome, tipo: g[0].tipo,
+        lojas: [...agrupar(g, (l) => l.lojaId).values()].map(resumoDaLoja).sort((x, y) => (y.custo ?? -1) - (x.custo ?? -1)),
+        visitas: sp.visitas, custo: sp.custo, faturamento: sp.faturamento, percentual: sp.percentual, situacao: sp.situacao,
+      };
+    }).sort((x, y) => (y.custo ?? -1) - (x.custo ?? -1));
+    return {
+      nome,
+      tipos: [...new Set(ls.map((l) => l.tipo))],
+      qtdPromotores: promotores.length,
+      qtdLojas: new Set(ls.map((l) => l.lojaId)).size,
+      visitas: s.visitas, custo: s.custo, faturamento: s.faturamento, percentual: s.percentual,
+      situacao: SITUACAO_DA_AGENCIA[s.situacao] || 'sem_dados',
+      promotores,
+    };
+  }).sort((x, y) => (y.custo ?? -1) - (x.custo ?? -1) || x.nome.localeCompare(y.nome));
+  return {
+    meta: meta(),
+    faturamento: total.faturamento, custo: total.custo, percentual: total.percentual,
+    situacao: SITUACAO_DA_AGENCIA[total.situacao] || 'sem_dados',
+    custoComparavel: total.custoComparavel, faturamentoComparavel: total.faturamentoComparavel,
+    custoSemLoja: arred(soma(a.semLoja, 'custo')),
+    agencias: lista,
+    avisos: calc.avisosDe(a),
   };
 }
 
@@ -221,14 +424,22 @@ async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   );
 }
 
-// Listas usadas nos filtros das telas. É chamada em toda troca de tela, então traz só o que é pequeno.
+// Listas usadas nos filtros das telas. Fica guardada na memória da aba (ver comum.js), então pode ser maior.
 async function opcoes() {
-  const [mesesFat, mesesVis, empresas, agencias] = await Promise.all([
-    consulta('SELECT DISTINCT mes FROM faturamento ORDER BY mes'),
+  const [mesesFat, mesesVis, empresas, promotores, lojas, supervisores] = await Promise.all([
+    consulta('SELECT DISTINCT mes FROM faturamento_erp ORDER BY mes'),
     consulta('SELECT DISTINCT mes FROM visitas ORDER BY mes'),
-    consulta("SELECT DISTINCT empresa FROM faturamento WHERE empresa <> '' ORDER BY empresa"),
-    consulta("SELECT agencia FROM promotores WHERE agencia <> '' UNION SELECT empresa FROM promotores WHERE empresa <> '' ORDER BY 1"),
+    consulta("SELECT DISTINCT empresa FROM faturamento_erp WHERE empresa <> '' ORDER BY empresa"),
+    consulta('SELECT DISTINCT p.agencia, p.empresa FROM promotores p'),
+    consulta('SELECT DISTINCT l.nome, l.cidade, l.uf FROM lojas l WHERE EXISTS (SELECT 1 FROM visitas v WHERE v.loja_id = l.id)'),
+    consulta("SELECT DISTINCT supervisor FROM visitas WHERE supervisor <> '' ORDER BY supervisor"),
   ]);
+  // Remove repetições que só diferem em maiúsculas/acentos ("SANTA HELENA" e "Santa Helena").
+  const unicos = (valores) => {
+    const vistos = new Map();
+    for (const v of valores.map(texto).filter(Boolean)) if (!vistos.has(normalizar(v))) vistos.set(normalizar(v), v);
+    return [...vistos.values()].sort((x, y) => x.localeCompare(y, 'pt-BR'));
+  };
   return {
     meta: config.meta,
     // Meses que têm cada tipo de dado. O Resumo só faz sentido num mês que tenha os dois.
@@ -236,12 +447,19 @@ async function opcoes() {
     mesesAtendimentos: mesesVis.map((m) => m.mes),
     meses: [...new Set([...mesesFat, ...mesesVis].map((m) => m.mes))].sort(),
     empresas: empresas.map((e) => e.empresa),
-    agencias: agencias.map((a) => a.agencia),
+    agencias: unicos(promotores.map(agenciaDe)),
+    ufs: unicos(lojas.map((l) => ufDe(l.uf) || l.uf)),
+    municipios: unicos(lojas.map((l) => l.cidade)),
+    mercados: unicos(lojas.map((l) => l.nome)),
+    supervisores: unicos(supervisores.map((s) => s.supervisor)),
   };
 }
 
-// Listas grandes, pedidas só pela tela que precisa delas (antes vinham junto das opções e pesavam em toda tela).
+// Listas grandes, pedidas só pela tela que precisa delas.
 const listaDeLojas = () => consulta('SELECT id, nome, cnpj, cidade FROM lojas ORDER BY nome');
 const nomesDosPromotores = () => consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome');
 
-module.exports = { resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores };
+module.exports = {
+  resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, detalheDoCliente, lojasPorUf, agencias,
+  salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores,
+};

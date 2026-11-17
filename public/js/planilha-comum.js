@@ -132,6 +132,25 @@
   }
 
   // Confere os dois dígitos verificadores do CNPJ (pega número digitado errado).
+  // UF por extenso ou sigla -> sigla ("São Paulo" -> "SP", "sp" -> "SP"). Desconhecida -> ''.
+  const UFS = {
+    AC: 'acre', AL: 'alagoas', AP: 'amapa', AM: 'amazonas', BA: 'bahia', CE: 'ceara', DF: 'distrito federal',
+    ES: 'espirito santo', GO: 'goias', MA: 'maranhao', MT: 'mato grosso', MS: 'mato grosso do sul', MG: 'minas gerais',
+    PA: 'para', PB: 'paraiba', PR: 'parana', PE: 'pernambuco', PI: 'piaui', RJ: 'rio de janeiro', RN: 'rio grande do norte',
+    RS: 'rio grande do sul', RO: 'rondonia', RR: 'roraima', SC: 'santa catarina', SP: 'sao paulo', SE: 'sergipe', TO: 'tocantins',
+  };
+  function ufDe(texto) {
+    const t = normalizar(texto);
+    if (!t) return '';
+    const sigla = t.toUpperCase();
+    if (UFS[sigla]) return sigla;
+    return Object.keys(UFS).find((uf) => UFS[uf] === t) || '';
+  }
+
+  // Identidade de uma loja atendida: CNPJ + nome + cidade. Duas lojas de uma rede podem usar o mesmo CNPJ
+  // (a matriz ou o CD compra por elas); por isso o CNPJ sozinho não identifica a loja.
+  const chaveDaLoja = (cnpj, nome, cidade) => `${cnpj || ''}|${normalizar(nome)}|${normalizar(cidade)}`;
+
   function cnpjValido(cnpj) {
     if (!/^\d{14}$/.test(cnpj) || /^(\d)\1{13}$/.test(cnpj)) return false;
     const digito = (tamanho) => {
@@ -320,12 +339,12 @@
       }
       if (!cnpj && (!nome || /^(sub)?total/i.test(nome))) return null;
       return {
-        // Sem CNPJ, a loja é identificada pelo nome + cidade (há redes com o mesmo nome em cidades diferentes).
-        chave: cnpj || `nome:${normalizar(nome)}|${normalizar(cidade)}`,
+        // Faturamento (ERP): o cliente é o CNPJ. Atendimento: a loja é CNPJ + nome + cidade (ver chaveDaLoja).
+        chave: tipo === 'faturamento' ? cnpj : chaveDaLoja(cnpj, nome || `CNPJ ${cnpj}`, cidade),
         cnpj,
         nome: nome || `CNPJ ${cnpj}`,
         cidade,
-        uf: textoDe(pegar(linha, 'uf')),
+        uf: ufDe(pegar(linha, 'uf')) || textoDe(pegar(linha, 'uf')),
         endereco: textoDe(pegar(linha, 'endereco')),
       };
     }
@@ -333,6 +352,8 @@
     function adicionarFaturamento(linha) {
       const loja = lojaDaLinha(linha);
       if (!loja) return ignorar('Sem loja (linha de total ou em branco)');
+      // O faturamento liga com as lojas atendidas pelo CNPJ: sem ele, não há com o que ligar.
+      if (!loja.cnpj) return ignorar('Sem CNPJ (o faturamento liga com as lojas pelo CNPJ)');
       const valor = numeroDe(pegar(linha, 'valor'));
       if (valor === null) return ignorar('Valor não é número');
       const mes = mesDe(pegar(linha, 'data')) || opcoes.mes;
@@ -434,5 +455,5 @@
     };
   }
 
-  return { CAMPOS, TIPOS_VALIDOS, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
+  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
 });

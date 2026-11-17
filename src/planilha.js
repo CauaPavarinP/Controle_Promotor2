@@ -56,14 +56,20 @@ async function lerXlsx(buffer) {
 }
 
 // Monta uma planilha .xlsx simples (usada nas exportações e nos modelos).
-async function montarPlanilha(nomeAba, colunas, linhas) {
+// Monta uma planilha .xlsx com uma ou mais abas: [{ nome, colunas: [{ titulo, chave, largura, formato }], linhas }].
+async function montarPasta(abas) {
   const pasta = new ExcelJS.Workbook();
-  const aba = pasta.addWorksheet(nomeAba);
-  aba.columns = colunas.map((c) => ({ header: c.titulo, key: c.chave, width: c.largura || 18, style: c.formato ? { numFmt: c.formato } : {} }));
-  aba.getRow(1).font = { bold: true };
-  aba.views = [{ state: 'frozen', ySplit: 1 }];
-  for (const linha of linhas) aba.addRow(linha);
+  for (const { nome, colunas, linhas } of abas) {
+    const aba = pasta.addWorksheet(nome.slice(0, 31)); // o Excel aceita no máximo 31 letras no nome da aba
+    aba.columns = colunas.map((c) => ({ header: c.titulo, key: c.chave, width: c.largura || 18, style: c.formato ? { numFmt: c.formato } : {} }));
+    aba.getRow(1).font = { bold: true };
+    aba.views = [{ state: 'frozen', ySplit: 1 }];
+    for (const linha of linhas) aba.addRow(linha);
+  }
   return Buffer.from(await pasta.xlsx.writeBuffer());
 }
 
-module.exports = { ...comum, lerXlsx, montarPlanilha };
+// Atalho para uma planilha de uma aba só (exportações simples e modelos).
+const montarPlanilha = (nomeAba, colunas, linhas) => montarPasta([{ nome: nomeAba, colunas, linhas }]);
+
+module.exports = { ...comum, lerXlsx, montarPlanilha, montarPasta };

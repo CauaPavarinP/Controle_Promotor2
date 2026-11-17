@@ -24,20 +24,29 @@
         <h2>Faturamento mês a mês</h2>
         <div class="rolagem">
           <table>
-            <thead><tr><th>Mês</th><th>Empresa</th><th class="num">Faturamento</th><th class="num">Custo promotores</th><th class="num">% custo</th><th>Situação</th></tr></thead>
+            <thead id="cab-meses"></thead>
             <tbody id="linhas"></tbody>
           </table>
         </div>
         <div class="paginacao" id="paginacao" hidden></div>
       </div>
-      <div class="painel">
+      <div class="painel" id="painel-outras" hidden>
+        <h2>Outras lojas com o mesmo CNPJ</h2>
+        <p class="ajuda">Nos meses em que mais de uma loja usa este CNPJ (rede que compra pela matriz ou pelo CD), o faturamento do CNPJ é dividido em partes iguais entre elas.</p>
+        <ul id="outras"></ul>
+      </div>
+      <div class="painel" id="painel-promotores" hidden>
         <h2>Promotores que atendem esta loja</h2>
         <div class="rolagem">
           <table>
-            <thead><tr><th>Promotor</th><th>Dias de visita</th><th class="num">Visitas</th><th class="num">Custo</th><th class="num">Faturamento nos meses atendidos</th><th class="num">% custo</th><th>Situação</th></tr></thead>
+            <thead><tr><th>Promotor</th><th>Dias de visita</th><th class="num">Visitas</th><th class="num">Custo</th><th class="num">Faturamento (parte dele)</th><th class="num">% custo</th><th>Situação</th></tr></thead>
             <tbody id="promotores"></tbody>
           </table>
         </div>
+      </div>
+      <div class="painel" id="painel-lojas" hidden>
+        <h2>Lojas atendidas com este CNPJ</h2>
+        <ul id="lojas-do-cnpj"></ul>
       </div>
     </main>
   </div>

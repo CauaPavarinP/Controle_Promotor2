@@ -23,7 +23,8 @@ function esc(texto) {
 
 const formatoReais = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const formatoPct = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const reais = (valor) => formatoReais.format(valor || 0);
+// Valor desconhecido (null) aparece como "—", e não como R$ 0,00: zero é um número, "—" é "não sabemos".
+const reais = (valor) => (valor === null || valor === undefined ? '—' : formatoReais.format(valor));
 const pct = (valor) => (valor === null || valor === undefined ? '—' : `${formatoPct.format(valor)}%`);
 
 const NOMES_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -38,7 +39,10 @@ function cnpjFormatado(cnpj) {
 }
 
 const SITUACOES = {
-  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
+  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados',
+  sem_promotor: 'Sem promotor', sem_atendimento_no_mes: 'Comprou sem atendimento', custo_nao_informado: 'Custo não informado',
+  falta_faturamento: 'Falta o faturamento', sem_cnpj: 'Sem CNPJ',
+  vale: 'Vale a pena', nao_vale: 'Não vale a pena', // situações da agência
 };
 const TIPOS = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência', FREELANCER: 'Freelancer' };
 const etiqueta = (situacao) => `<span class="etiqueta ${esc(situacao)}">${esc(SITUACOES[situacao] || situacao)}</span>`;
@@ -87,7 +91,8 @@ async function apiComMemoria(url, desenhar) {
 
 function desenharMenu(usuario) {
   const paginas = [
-    ['/resumo', 'Resumo'], ['/faturamento', 'Faturamento'], ['/promotores', 'Promotores'], ['/importar', 'Importar'],
+    ['/resumo', 'Resumo'], ['/faturamento', 'Faturamento'], ['/promotores', 'Promotores'], ['/lojas-uf', 'Lojas por UF'],
+    ['/agencias', 'Agências'], ['/importar', 'Importar'],
   ];
   if (usuario.perfil === 'suporte') paginas.push(['/usuarios', 'Usuários']);
   // A ficha do promotor e a da loja ficam "dentro" de Promotores e de Faturamento no menu.
@@ -191,25 +196,6 @@ function parametros(objeto) {
   return p.toString();
 }
 
-// Explica quando falta um dos dois tipos de dado no período (faturamento ou atendimentos).
-// Sem isso a tela mostraria só zeros, parecendo quebrada. Devolve '' quando o período tem os dois.
-function faltaNoPeriodo(opcoes) {
-  const { de, ate } = periodoAtual();
-  const noPeriodo = (meses) => meses.some((m) => m >= de && m <= ate);
-  const periodo = de === ate ? rotuloMes(de) : `${rotuloMes(de)} a ${rotuloMes(ate)}`;
-  const onde = (meses) => (meses.length ? `Há dados em: ${meses.map(rotuloMes).join(', ')}.` : 'Ainda não foi importado nenhum.');
-  const faltas = [];
-  if (!noPeriodo(opcoes.mesesAtendimentos)) faltas.push(`Não há atendimentos de promotores em ${periodo}. ${onde(opcoes.mesesAtendimentos)}`);
-  if (!noPeriodo(opcoes.mesesFaturamento)) faltas.push(`Não há faturamento em ${periodo}. ${onde(opcoes.mesesFaturamento)}`);
-  // Tem os dois no período, mas em meses diferentes: a comparação é feita mês a mês, então também não fecha.
-  const juntos = opcoes.mesesAtendimentos.some((m) => m >= de && m <= ate && opcoes.mesesFaturamento.includes(m));
-  if (!faltas.length && !juntos) {
-    faltas.push(`Em ${periodo}, o faturamento e os atendimentos estão em meses diferentes (faturamento: ${opcoes.mesesFaturamento.map(rotuloMes).join(', ')}; atendimentos: ${opcoes.mesesAtendimentos.map(rotuloMes).join(', ')}). O custo de um mês só é comparado com o faturamento do mesmo mês.`);
-  }
-  if (!faltas.length) return '';
-  return `${faltas.join(' ')} Para comparar custo com faturamento, escolha um período que tenha os dois ou importe o que falta.`;
-}
-
 // Paginação: em vez de esticar a tela com centenas de linhas, mostra 10 por vez com "Anterior" e "Próxima".
 // Uso:  const paginas = criarPaginacao('linhas', 'paginacao');
 //       paginas.mostrar(listaDeLinhasEmHtml, '<tr>...mensagem de lista vazia...</tr>', 'lojas');
@@ -263,4 +249,164 @@ function idDoEndereco(nomeDoItem) {
   if (/^\d{1,9}$/.test(texto) && Number(texto) > 0) return Number(texto);
   mostrarAviso(document.getElementById('aviso'), `${nomeDoItem} não encontrada: o endereço desta página está incompleto ou errado. Volte para a lista e clique de novo.`);
   return null;
+}
+
+// ---------- Barra de filtros (Resumo, Faturamento, Promotores, Lojas por UF e Agências) ----------
+// Período (acumulado ou um mês) + agência, tipo, UF, supervisor, município e mercado. Os filtros escolhidos
+// aparecem como etiquetas com ✕ e ficam lembrados enquanto a aba estiver aberta (valem para todas as telas).
+const CAMPOS_FILTRO = [
+  { campo: 'agencia', rotulo: 'Agência' }, { campo: 'tipo', rotulo: 'Tipo' }, { campo: 'uf', rotulo: 'UF' },
+  { campo: 'supervisor', rotulo: 'Supervisor' }, { campo: 'municipio', rotulo: 'Município' }, { campo: 'mercado', rotulo: 'Mercado' },
+];
+let filtros = {};
+let aoMudarFiltros = () => {};
+
+function lerFiltrosGuardados() {
+  try { return JSON.parse(sessionStorage.getItem('filtros')) || {}; } catch { return {}; }
+}
+function guardarFiltros() {
+  try { sessionStorage.setItem('filtros', JSON.stringify(filtros)); } catch { /* sem armazenamento */ }
+}
+
+function montarFiltros(opcoes, aoMudar) {
+  aoMudarFiltros = aoMudar;
+  filtros = lerFiltrosGuardados();
+  const opcoesDe = (lista, rotulo = (v) => v) => lista.map((v) => `<option value="${esc(v)}">${esc(rotulo(v))}</option>`).join('');
+  document.getElementById('filtros-comuns').innerHTML = `
+    <div class="campo"><label for="f-modo">Período</label>
+      <select id="f-modo"><option value="acumulado">Acumulado</option><option value="mes">Um mês</option></select></div>
+    <div class="campo"><label for="periodo-de" id="rotulo-de">De</label><select id="periodo-de"></select></div>
+    <div class="campo" id="campo-ate"><label for="periodo-ate">Até</label><select id="periodo-ate"></select></div>
+    <div class="campo"><label for="f-agencia">Agência</label><select id="f-agencia"><option value="">Todas</option>${opcoesDe(opcoes.agencias)}</select></div>
+    <div class="campo"><label for="f-tipo">Tipo</label><select id="f-tipo"><option value="">Todos</option>${opcoesDe(Object.keys(TIPOS), (t) => TIPOS[t])}</select></div>
+    <div class="campo estreito"><label for="f-uf">UF</label><select id="f-uf"><option value="">Todas</option>${opcoesDe(opcoes.ufs)}<option value="-">Sem UF</option></select></div>
+    <div class="campo"><label for="f-supervisor">Supervisor</label><select id="f-supervisor"><option value="">Todos</option>${opcoesDe(opcoes.supervisores)}</select></div>
+    <div class="campo"><label for="f-municipio">Município</label><input id="f-municipio" list="lista-municipios" autocomplete="off" placeholder="Todos">
+      <datalist id="lista-municipios">${opcoesDe(opcoes.municipios)}</datalist></div>
+    <div class="campo"><label for="f-mercado">Mercado</label><input id="f-mercado" list="lista-mercados" autocomplete="off" placeholder="Loja ou rede">
+      <datalist id="lista-mercados">${opcoesDe(opcoes.mercados)}</datalist></div>`;
+
+  const modo = document.getElementById('f-modo');
+  const de = document.getElementById('periodo-de');
+  const ate = document.getElementById('periodo-ate');
+  modo.value = filtros.modo === 'mes' ? 'mes' : 'acumulado';
+  const aplicarModo = () => {
+    const umMes = modo.value === 'mes';
+    document.getElementById('campo-ate').hidden = umMes;
+    document.getElementById('rotulo-de').textContent = umMes ? 'Mês' : 'De';
+    if (umMes) { ate.value = de.value; lembrar('periodo-ate', ate.value); }
+  };
+  montarPeriodo(opcoes, () => { aplicarModo(); desenharEtiquetas(); aoMudarFiltros(); });
+  aplicarModo();
+  modo.addEventListener('change', () => {
+    filtros.modo = modo.value;
+    guardarFiltros();
+    aplicarModo();
+    desenharEtiquetas();
+    aoMudarFiltros();
+  });
+
+  for (const { campo } of CAMPOS_FILTRO) {
+    const elemento = document.getElementById(`f-${campo}`);
+    elemento.value = filtros[campo] || '';
+    const mudou = () => {
+      const valor = elemento.value.trim();
+      if ((filtros[campo] || '') === valor) return;
+      if (valor) filtros[campo] = valor; else delete filtros[campo];
+      guardarFiltros();
+      desenharEtiquetas();
+      aoMudarFiltros();
+    };
+    elemento.addEventListener('change', mudou);
+    if (campo === 'mercado') elemento.addEventListener('input', comAtraso(mudou, 500));
+  }
+  document.getElementById('etiquetas').addEventListener('click', (evento) => {
+    const botao = evento.target.closest('button[data-tirar]');
+    if (!botao) return;
+    if (botao.dataset.tirar === '*') for (const { campo } of CAMPOS_FILTRO) definirFiltro(campo, '', false);
+    else definirFiltro(botao.dataset.tirar, '', false);
+    aoMudarFiltros();
+  });
+  desenharEtiquetas();
+}
+
+// Muda um filtro por código (ex.: os botões de UF da tela Lojas por UF).
+function definirFiltro(campo, valor, recarregar = true) {
+  if (valor) filtros[campo] = valor; else delete filtros[campo];
+  const elemento = document.getElementById(`f-${campo}`);
+  if (elemento) elemento.value = valor || '';
+  guardarFiltros();
+  desenharEtiquetas();
+  if (recarregar) aoMudarFiltros();
+}
+
+function desenharEtiquetas() {
+  const { de, ate } = periodoAtual();
+  const umMes = filtros.modo === 'mes' || de === ate;
+  const periodo = umMes ? rotuloMes(de) : `${rotuloMes(de)} a ${rotuloMes(ate)} (acumulado)`;
+  const ativos = CAMPOS_FILTRO.filter(({ campo }) => filtros[campo]);
+  const valorDe = (campo) => {
+    if (campo === 'tipo') return TIPOS[filtros.tipo] || filtros.tipo;
+    if (campo === 'uf' && filtros.uf === '-') return 'sem UF';
+    return filtros[campo];
+  };
+  document.getElementById('etiquetas').innerHTML = `
+    <span class="etiqueta-filtro fixa">Período: ${esc(periodo)}</span>
+    ${ativos.map(({ campo, rotulo }) => `<span class="etiqueta-filtro">${esc(rotulo)}: ${esc(valorDe(campo))}
+      <button type="button" data-tirar="${campo}" aria-label="Tirar o filtro ${esc(rotulo)}" title="Tirar o filtro">✕</button></span>`).join('')}
+    ${ativos.length > 1 ? '<button type="button" class="secundario pequeno" data-tirar="*">Limpar filtros</button>' : ''}`;
+}
+
+// Período + filtros escolhidos, prontos para ir na chamada à API.
+function filtrosAtuais() {
+  const resultado = { ...periodoAtual() };
+  for (const { campo } of CAMPOS_FILTRO) if (filtros[campo]) resultado[campo] = filtros[campo];
+  return resultado;
+}
+
+// ---------- Avisos de qualidade dos dados ----------
+// Caixas no topo da tela quando os números estão incompletos (vêm prontos do servidor).
+function mostrarAvisos(avisos) {
+  const caixa = document.getElementById('avisos');
+  if (!caixa) return;
+  caixa.innerHTML = (avisos || []).map((a) => `
+    <div class="aviso-dados" role="note">
+      <strong>${esc(a.titulo)}.</strong> ${esc(a.texto)}
+      ${a.itens.length ? `<details><summary>Ver ${a.itens.length + a.mais === 1 ? 'qual' : 'quais'}</summary>
+        <ul>${a.itens.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+        ${a.mais ? `<p class="ajuda">E mais ${a.mais}. A lista completa sai na exportação para Excel ou nos filtros da tela.</p>` : ''}</details>` : ''}
+    </div>`).join('');
+}
+
+// ---------- Ordenação de tabela por coluna ----------
+// Cabeçalhos com data-ordem="campo" ficam clicáveis. "aoOrdenar(campo, direcao)" redesenha a tabela.
+function ordenacaoNaTabela(thead, aoOrdenar, inicial = { campo: '', direcao: 1 }) {
+  let atual = { ...inicial };
+  const marcar = () => {
+    for (const th of thead.querySelectorAll('th[data-ordem]')) {
+      const ativo = th.dataset.ordem === atual.campo;
+      th.setAttribute('aria-sort', ativo ? (atual.direcao > 0 ? 'ascending' : 'descending') : 'none');
+      th.querySelector('.seta').textContent = ativo ? (atual.direcao > 0 ? ' ▲' : ' ▼') : '';
+    }
+  };
+  for (const th of thead.querySelectorAll('th[data-ordem]')) {
+    th.innerHTML = `<button type="button" class="ordenar">${th.innerHTML}<span class="seta" aria-hidden="true"></span></button>`;
+    th.querySelector('button').addEventListener('click', () => {
+      atual = { campo: th.dataset.ordem, direcao: atual.campo === th.dataset.ordem ? -atual.direcao : (th.classList.contains('num') ? -1 : 1) };
+      marcar();
+      aoOrdenar(atual.campo, atual.direcao);
+    });
+  }
+  marcar();
+  return () => atual;
+}
+
+// Compara dois valores para ordenar: números como números, textos em ordem alfabética, vazios no fim.
+function comparar(a, b, direcao) {
+  const vazio = (v) => v === null || v === undefined || v === '';
+  if (vazio(a) && vazio(b)) return 0;
+  if (vazio(a)) return 1;
+  if (vazio(b)) return -1;
+  if (typeof a === 'number' && typeof b === 'number') return (a - b) * direcao;
+  return String(a).localeCompare(String(b), 'pt-BR') * direcao;
 }

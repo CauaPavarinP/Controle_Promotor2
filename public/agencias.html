@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agências · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo">
+        <div><h1>Agências</h1><p class="subtitulo" id="meta-texto">A agência vale o que custa quando o custo do atendimento fica dentro do limite do faturamento das lojas dela.</p></div>
+        <div class="acoes"><button type="button" id="exportar" class="secundario">Exportar Excel</button></div>
+      </div>
+      <div class="painel">
+        <div class="filtros" id="filtros-comuns"></div>
+        <div class="etiquetas" id="etiquetas"></div>
+      </div>
+      <div id="avisos"></div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="cards" id="cards"></div>
+      <div class="painel">
+        <p class="ajuda">Clique numa agência para ver os promotores dela e, no promotor, as lojas.</p>
+        <div class="rolagem">
+          <table class="tabela-agencias">
+            <thead><tr><th>Agência / promotor / loja</th><th>Tipo</th><th class="num">Promotores</th><th class="num">Lojas</th><th class="num">Visitas</th>
+              <th class="num">Custo</th><th class="num">Faturamento</th><th class="num">% do faturamento</th><th>Situação</th></tr></thead>
+            <tbody id="linhas"></tbody>
+            <tfoot id="totais"></tfoot>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/agencias.js"></script>
+</body>
+</html>

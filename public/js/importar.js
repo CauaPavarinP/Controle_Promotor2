@@ -215,6 +215,7 @@ async function confirmar() {
       ? `Importação concluída: ${r.importadas} promotor(es), custo mensal somado de ${reais(r.total)}.`
       : `Importação concluída: ${r.importadas} registro(s), total ${reais(r.total)}, mês(es) ${r.meses.map(rotuloMes).join(', ')}.`];
     if (r.lojasNovas) partes.push(`${r.lojasNovas} loja(s) nova(s) cadastrada(s).`);
+    if (r.clientesNovos) partes.push(`${r.clientesNovos} CNPJ(s) novo(s) no faturamento do ERP.`);
     if (r.promotoresNovos) partes.push(`${r.promotoresNovos} promotor(es) novo(s) cadastrado(s).`);
     if (r.promotoresAtualizados) partes.push(`${r.promotoresAtualizados} promotor(es) atualizado(s).`);
     if (r.ignoradas) partes.push(`${r.ignoradas} linha(s) ignorada(s): ${lista(r.motivos)}.`);

@@ -20,7 +20,7 @@ async function carregar(manterPagina = false) {
     document.getElementById('cards').innerHTML = `
       <div class="card ${classe}"><div class="rotulo">Custo sobre o faturamento</div><div class="valor">${pct(detalhe.percentual)}</div><div class="detalhe">Meta: até ${pct(detalhe.meta)}</div></div>
       <div class="card"><div class="rotulo">Custo no período</div><div class="valor">${reais(detalhe.custo)}</div></div>
-      <div class="card"><div class="rotulo">Faturamento das lojas visitadas</div><div class="valor">${reais(detalhe.faturamento)}</div></div>
+      <div class="card"><div class="rotulo">Faturamento (parte dele nas lojas)</div><div class="valor">${reais(detalhe.faturamento)}</div><div class="detalhe">Loja com mais de um promotor: o faturamento é dividido entre eles</div></div>
       <div class="card"><div class="rotulo">Lojas atendidas</div><div class="valor">${detalhe.lojas.length}</div><div class="detalhe">${detalhe.visitas ? `${detalhe.visitas} visita(s) informada(s)` : 'quantidade de visitas não informada'}</div></div>`;
 
     const item = (rotulo, valor) => `<div><dt>${rotulo}</dt><dd>${valor}</dd></div>`;
@@ -31,16 +31,19 @@ async function carregar(manterPagina = false) {
       ...CAMPOS_DINHEIRO.map(([campo, rotulo]) => item(rotulo, reais(p[campo]))),
       item('Custo fixo mensal (soma)', reais(p.custoFixo)), item('Observação', esc(p.observacao || '—')),
     ].join('');
-    const informado = detalhe.lojas.some((l) => l.atendimentos.some((a) => a.custoInformado));
+    const informado = detalhe.lojas.some((l) => l.atendimentos.some((a) => a.origemCusto === 'planilha'));
+    const naoInformado = detalhe.lojas.some((l) => l.atendimentos.some((a) => a.custo === null));
     document.getElementById('regra').textContent = detalhe.custoSemLoja > 0
       ? `Atenção: ${reais(detalhe.custoSemLoja)} do custo deste período não tem loja lançada. Sem saber quais lojas ele atende, não dá para comparar com o faturamento.`
+      : naoInformado
+        ? 'Há lojas sem o valor do mês na planilha e sem salário no cadastro: o custo delas está como "não informado" e fica fora do %.'
       : informado
         ? 'Neste período, o custo veio da planilha de atendimentos (valor informado por loja).'
         : 'Sem valor por loja na planilha, o custo fixo mensal acima é dividido entre as lojas (pelas visitas; sem visitas informadas, em partes iguais).';
 
     paginas.mostrar(detalhe.lojas.map((l, i) => `
       <tr>
-        <td>${esc(l.loja.nome)}<span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}${l.loja.cidade ? ` · ${esc(l.loja.cidade)}` : ''}</span></td>
+        <td><a href="/loja?id=${l.loja.id}">${esc(l.loja.nome)}</a><span class="menor">${l.loja.cnpj ? esc(cnpjFormatado(l.loja.cnpj)) : 'sem CNPJ'}${l.loja.cidade ? ` · ${esc(l.loja.cidade)}` : ''}${l.lojasDoCnpj > 1 ? ` · CNPJ dividido com ${l.lojasDoCnpj - 1} loja(s)` : ''}</span></td>
         <td>${esc(l.dias || '—')}</td>
         <td class="num">${l.visitas || '—'}</td>
         <td class="num">${reais(l.custo)}</td>
@@ -50,7 +53,7 @@ async function carregar(manterPagina = false) {
         <td class="num"><button type="button" class="perigo pequeno" data-excluir="${i}" aria-label="Excluir visitas de ${esc(l.loja.nome)}">Excluir</button></td>
       </tr>`), '<tr><td colspan="8" class="vazio">Nenhuma loja lançada neste período.</td></tr>', 'lojas', manterPagina);
     document.getElementById('totais').innerHTML = detalhe.lojas.length ? `
-      <tr><td>Total</td><td></td><td class="num">${detalhe.visitas || '—'}</td><td class="num">${reais(detalhe.custo)}</td>
+      <tr><td>Total das lojas</td><td></td><td class="num">${detalhe.visitas || '—'}</td><td class="num">${reais(detalhe.custoSemLoja ? detalhe.custo - detalhe.custoSemLoja : detalhe.custo)}</td>
       <td class="num">${reais(detalhe.faturamento)}</td><td class="num">${pct(detalhe.percentual)}</td><td></td><td></td></tr>` : '';
   } catch (erro) {
     mostrarAviso(aviso, erro.message);

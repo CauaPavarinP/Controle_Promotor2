@@ -10,7 +10,10 @@ const planilha = require('./planilha');
 const { gravarFaturamento, gravarVisitas, gravarPromotores, ErroDeImportacao } = require('./importar');
 
 const ROTULO_SITUACAO = {
-  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados', sem_promotor: 'Sem promotor',
+  dentro: 'Dentro da meta', fora: 'Fora da meta', sem_faturamento: 'Sem faturamento', sem_lojas: 'Sem lojas', sem_dados: 'Sem dados',
+  sem_promotor: 'Sem promotor', sem_atendimento_no_mes: 'Comprou sem atendimento', custo_nao_informado: 'Custo não informado',
+  falta_faturamento: 'Falta o faturamento', sem_cnpj: 'Sem CNPJ',
+  vale: 'Vale a pena', nao_vale: 'Não vale a pena',
 };
 const ROTULO_TIPO = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência', FREELANCER: 'Freelancer' };
 
@@ -53,7 +56,7 @@ function criarApp() {
 
   // As telas só abrem para quem está logado (a de Usuários, só para o suporte). Os dados já eram protegidos
   // pela API; isto evita que alguém sem login veja até a "casca" das telas.
-  app.get(/^\/(resumo|faturamento|loja|promotores|promotor|importar|usuarios|conta)(\.html)?\/?$/, async (req, res, next) => {
+  app.get(/^\/(resumo|faturamento|loja|promotores|promotor|lojas-uf|agencias|importar|usuarios|conta)(\.html)?\/?$/, async (req, res, next) => {
     const usuario = await auth.usuarioDaSessao(req);
     if (!usuario) return res.redirect('/login');
     if (req.path.startsWith('/usuarios') && usuario.perfil !== 'suporte') return res.redirect('/resumo');
@@ -99,6 +102,13 @@ function criarApp() {
     if (!detalhe) return res.status(404).json({ erro: 'Loja não encontrada.' });
     res.json(detalhe);
   });
+  // Cliente do ERP pelo CNPJ (só dígitos, 11 a 14).
+  api.get('/clientes/:cnpj', async (req, res) => {
+    if (!/^\d{11,14}$/.test(req.params.cnpj)) return res.status(400).json({ erro: 'CNPJ inválido.' });
+    const detalhe = await relatorios.detalheDoCliente(req.params.cnpj, req.query);
+    if (!detalhe) return res.status(404).json({ erro: 'Cliente não encontrado no faturamento do ERP.' });
+    res.json(detalhe);
+  });
   api.get('/promotores-nomes', async (req, res) => res.json(await relatorios.nomesDosPromotores()));
   api.post('/conta/senha', async (req, res) => {
     await auth.trocarPropriaSenha(req.usuario.id, req.body.senhaAtual, req.body.senhaNova);
@@ -109,6 +119,8 @@ function criarApp() {
   api.get('/resumo', async (req, res) => res.json(await relatorios.resumo(req.query)));
   api.get('/faturamento', async (req, res) => res.json(await relatorios.faturamentoPorLoja(req.query)));
   api.get('/promotores', async (req, res) => res.json(await relatorios.listaDePromotores(req.query)));
+  api.get('/lojas-uf', async (req, res) => res.json(await relatorios.lojasPorUf(req.query)));
+  api.get('/agencias', async (req, res) => res.json(await relatorios.agencias(req.query)));
 
   api.get('/promotores/:id', async (req, res) => {
     const detalhe = await relatorios.detalheDoPromotor(Number(req.params.id), req.query);
@@ -134,44 +146,96 @@ function criarApp() {
   });
 
   // ---------- Exportar para Excel ----------
-  const enviarPlanilha = async (res, nome, colunas, linhas) => {
-    const arquivo = await planilha.montarPlanilha(nome, colunas, linhas);
+  // As exportações usam os mesmos filtros da tela e levam TODAS as linhas (não só a página que aparece).
+  const enviarPasta = async (res, nome, abas) => {
+    const arquivo = await planilha.montarPasta(abas);
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="${nome}.xlsx"`,
+      'Content-Disposition': `attachment; filename="${nome.replace(/[^\w.-]/g, '_')}.xlsx"`,
     });
     res.send(arquivo);
   };
+  const enviarPlanilha = (res, nome, colunas, linhas) => enviarPasta(res, nome, [{ nome, colunas, linhas }]);
   const REAIS = '#,##0.00';
-  const pct = (valor) => (valor === null ? null : Math.round(valor * 100) / 100);
+  const pct = (valor) => (valor === null || valor === undefined ? null : Math.round(valor * 100) / 100);
+  const cnpjFmt = (c) => (c && c.length === 14 ? `${c.slice(0, 2)}.${c.slice(2, 5)}.${c.slice(5, 8)}/${c.slice(8, 12)}-${c.slice(12)}` : c || '');
+  const rotuloMes = (m) => `${m.slice(5)}/${m.slice(0, 4)}`;
+  const situacaoTexto = (s) => ROTULO_SITUACAO[s] || s;
+  const C = {
+    custo: { titulo: 'Custo', chave: 'custo', formato: REAIS, largura: 14 },
+    faturamento: { titulo: 'Faturamento', chave: 'faturamento', formato: REAIS, largura: 16 },
+    percentual: { titulo: '% custo', chave: 'percentual', formato: '0.00', largura: 10 },
+    situacao: { titulo: 'Situação', chave: 'situacao', largura: 22 },
+    visitas: { titulo: 'Visitas', chave: 'visitas', largura: 9 },
+  };
+  const numeros = (x) => ({ ...x, percentual: pct(x.percentual), situacao: situacaoTexto(x.situacao) });
 
   api.get('/faturamento/exportar', async (req, res) => {
     const { lojas } = await relatorios.faturamentoPorLoja(req.query);
     await enviarPlanilha(res, `faturamento-${req.query.de}-a-${req.query.ate}`, [
-      { titulo: 'Loja', chave: 'loja', largura: 50 }, { titulo: 'CNPJ', chave: 'cnpj', largura: 20 },
-      { titulo: 'Cidade', chave: 'cidade' }, { titulo: 'UF', chave: 'uf', largura: 12 },
-      { titulo: 'Faturamento', chave: 'faturamento', formato: REAIS }, { titulo: 'Visitas', chave: 'visitas', largura: 10 },
-      { titulo: 'Custo promotores', chave: 'custo', formato: REAIS }, { titulo: '% custo', chave: 'percentual', formato: '0.00' },
-      { titulo: 'Situação', chave: 'situacao' },
-    ], lojas.map((l) => ({
-      loja: l.loja.nome, cnpj: l.loja.cnpj || '', cidade: l.loja.cidade, uf: l.loja.uf, faturamento: l.faturamento,
-      visitas: l.visitas, custo: l.custo, percentual: pct(l.percentual), situacao: ROTULO_SITUACAO[l.situacao],
-    })));
+      { titulo: 'Loja / cliente', chave: 'nome', largura: 50 }, { titulo: 'CNPJ', chave: 'cnpj', largura: 20 },
+      { titulo: 'Cidade', chave: 'cidade' }, { titulo: 'UF', chave: 'uf', largura: 6 },
+      C.faturamento, { titulo: 'Lojas no CNPJ', chave: 'lojasDoCnpj', largura: 13 }, C.visitas,
+      { ...C.custo, titulo: 'Custo promotores' }, C.percentual, C.situacao,
+    ], lojas.map((l) => ({ ...numeros(l), cnpj: cnpjFmt(l.cnpj), lojasDoCnpj: l.lojasDoCnpj || null })));
   });
 
   api.get('/promotores-exportar', async (req, res) => {
     const { promotores } = await relatorios.listaDePromotores(req.query);
     await enviarPlanilha(res, `promotores-${req.query.de}-a-${req.query.ate}`, [
       { titulo: 'Promotor', chave: 'nome', largura: 40 }, { titulo: 'Tipo', chave: 'tipo', largura: 12 },
-      { titulo: 'Agência', chave: 'agencia', largura: 25 }, { titulo: 'Empresa', chave: 'empresa', largura: 25 }, { titulo: 'Código', chave: 'codigo', largura: 10 },
-      { titulo: 'Lojas', chave: 'qtdLojas', largura: 10 },
-      { titulo: 'Visitas', chave: 'visitas', largura: 10 }, { titulo: 'Custo', chave: 'custo', formato: REAIS },
-      { titulo: 'Faturamento das lojas', chave: 'faturamento', formato: REAIS, largura: 24 },
-      { titulo: '% custo', chave: 'percentual', formato: '0.00' }, { titulo: 'Situação', chave: 'situacao' },
-      { titulo: 'Ativo', chave: 'ativo', largura: 10 },
-    ], promotores.map((p) => ({
-      ...p, tipo: ROTULO_TIPO[p.tipo], percentual: pct(p.percentual), situacao: ROTULO_SITUACAO[p.situacao], ativo: p.ativo ? 'Sim' : 'Não',
+      { titulo: 'Agência', chave: 'agencia', largura: 30 }, { titulo: 'Código', chave: 'codigo', largura: 10 },
+      { titulo: 'Lojas', chave: 'qtdLojas', largura: 8 }, C.visitas, C.custo,
+      { titulo: 'Custo sem loja', chave: 'custoSemLoja', formato: REAIS, largura: 14 },
+      { ...C.faturamento, titulo: 'Faturamento (parte dele)', largura: 24 }, C.percentual, C.situacao,
+      { titulo: 'Ativo', chave: 'ativo', largura: 8 },
+    ], promotores.map((p) => ({ ...numeros(p), tipo: ROTULO_TIPO[p.tipo], ativo: p.ativo ? 'Sim' : 'Não' })));
+  });
+
+  api.get('/lojas-uf/exportar', async (req, res) => {
+    const { linhas, meses } = await relatorios.lojasPorUf(req.query);
+    await enviarPlanilha(res, `lojas-por-uf-${req.query.de}-a-${req.query.ate}`, [
+      { titulo: 'Supervisor', chave: 'supervisor', largura: 20 }, { titulo: 'Agência', chave: 'agencia', largura: 30 },
+      { titulo: 'Promotor', chave: 'promotor', largura: 26 }, { titulo: 'Tipo', chave: 'tipo', largura: 11 },
+      { titulo: 'CNPJ', chave: 'cnpj', largura: 20 }, { titulo: 'Loja', chave: 'loja', largura: 40 },
+      { titulo: 'Cidade', chave: 'cidade', largura: 20 }, { titulo: 'UF', chave: 'uf', largura: 6 }, C.visitas,
+      ...meses.map((m) => ({ titulo: `Valor ${rotuloMes(m)}`, chave: `m_${m}`, formato: REAIS, largura: 14 })),
+      { titulo: 'Total informado', chave: 'total', formato: REAIS, largura: 15 }, C.custo, C.faturamento, C.percentual, C.situacao,
+    ], linhas.map((l) => ({
+      ...numeros(l), tipo: ROTULO_TIPO[l.tipo] || l.tipo, cnpj: cnpjFmt(l.cnpj),
+      ...Object.fromEntries(meses.map((m) => [`m_${m}`, l.valores[m] ?? null])),
     })));
+  });
+
+  api.get('/agencias/exportar', async (req, res) => {
+    const { agencias: lista } = await relatorios.agencias(req.query);
+    const tipos = (a) => a.tipos.map((t) => ROTULO_TIPO[t] || t).join(', ');
+    await enviarPasta(res, `agencias-${req.query.de}-a-${req.query.ate}`, [
+      {
+        nome: 'Agências',
+        colunas: [{ titulo: 'Agência', chave: 'nome', largura: 40 }, { titulo: 'Tipo', chave: 'tipo', largura: 16 },
+          { titulo: 'Promotores', chave: 'qtdPromotores', largura: 11 }, { titulo: 'Lojas', chave: 'qtdLojas', largura: 8 },
+          C.visitas, C.custo, C.faturamento, C.percentual, C.situacao],
+        linhas: lista.map((a) => ({ ...numeros(a), tipo: tipos(a) })),
+      },
+      {
+        nome: 'Promotores',
+        colunas: [{ titulo: 'Agência', chave: 'agencia', largura: 40 }, { titulo: 'Promotor', chave: 'nome', largura: 30 },
+          { titulo: 'Tipo', chave: 'tipo', largura: 11 }, { titulo: 'Lojas', chave: 'qtdLojas', largura: 8 },
+          C.visitas, C.custo, C.faturamento, C.percentual, C.situacao],
+        linhas: lista.flatMap((a) => a.promotores.map((p) => ({ ...numeros(p), agencia: a.nome, tipo: ROTULO_TIPO[p.tipo] || p.tipo, qtdLojas: p.lojas.length }))),
+      },
+      {
+        nome: 'Lojas',
+        colunas: [{ titulo: 'Agência', chave: 'agencia', largura: 40 }, { titulo: 'Promotor', chave: 'promotor', largura: 30 },
+          { titulo: 'Loja', chave: 'loja', largura: 40 }, { titulo: 'CNPJ', chave: 'cnpj', largura: 20 },
+          { titulo: 'Cidade', chave: 'cidade', largura: 20 }, { titulo: 'UF', chave: 'uf', largura: 6 },
+          C.visitas, C.custo, C.faturamento, C.percentual, C.situacao],
+        linhas: lista.flatMap((a) => a.promotores.flatMap((p) => p.lojas.map((l) => ({
+          ...numeros(l), agencia: a.nome, promotor: p.nome, loja: l.loja.nome, cnpj: cnpjFmt(l.loja.cnpj), cidade: l.loja.cidade, uf: l.loja.uf,
+        })))),
+      },
+    ]);
   });
 
   // Planilhas modelo: o formato padrão para pedir às agências (mesmas colunas do "Modelo de atendimento" da 101).
@@ -232,8 +296,8 @@ function criarApp() {
     const id = Number(req.params.id);
     const [importacao] = await consulta('SELECT tipo FROM importacoes WHERE id = $1', [id]);
     if (!importacao) return res.status(404).json({ erro: 'Importação não encontrada.' });
-    const tabela = { faturamento: 'faturamento', visitas: 'visitas' }[importacao.tipo];
-    const apagados = tabela ? await consulta(`DELETE FROM ${tabela} WHERE importacao_id = $1 RETURNING id`, [id]) : [];
+    const tabela = { faturamento: 'faturamento_erp', visitas: 'visitas' }[importacao.tipo];
+    const apagados = tabela ? await consulta(`DELETE FROM ${tabela} WHERE importacao_id = $1 RETURNING 1`, [id]) : [];
     await consulta('DELETE FROM importacoes WHERE id = $1', [id]);
     res.json({ ok: true, registros: apagados.length });
   });

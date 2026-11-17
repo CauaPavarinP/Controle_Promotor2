@@ -1,6 +1,7 @@
 // Conexão com o PostgreSQL e criação das tabelas.
 const { Pool, types } = require('pg');
 const config = require('./config');
+const { chaveDaLoja } = require('../public/js/planilha-comum');
 
 // O PostgreSQL devolve números decimais (numeric) como texto. Aqui pedimos como número.
 types.setTypeParser(1700, (valor) => parseFloat(valor));
@@ -46,10 +47,13 @@ CREATE TABLE IF NOT EXISTS usuarios (
   criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Lojas atendidas (pontos de venda que aparecem nas planilhas de atendimento).
+-- "chave" = CNPJ + nome + cidade: duas lojas de uma rede podem ter o mesmo CNPJ (a matriz compra por elas).
 CREATE TABLE IF NOT EXISTS lojas (
   id          SERIAL PRIMARY KEY,
   nome        TEXT NOT NULL,
-  cnpj        TEXT UNIQUE,
+  cnpj        TEXT,
+  chave       TEXT,
   cidade      TEXT NOT NULL DEFAULT '',
   uf          TEXT NOT NULL DEFAULT '',
   endereco    TEXT NOT NULL DEFAULT '',
@@ -85,16 +89,25 @@ CREATE TABLE IF NOT EXISTS importacoes (
   criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Faturamento de cada loja, um valor por mês e por empresa.
-CREATE TABLE IF NOT EXISTS faturamento (
-  id            SERIAL PRIMARY KEY,
-  loja_id       INTEGER NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+-- Clientes do ERP (FoccoERP), identificados pelo CNPJ: nome, cidade e UF do último arquivo importado.
+CREATE TABLE IF NOT EXISTS clientes_erp (
+  cnpj          TEXT PRIMARY KEY,
+  nome          TEXT NOT NULL DEFAULT '',
+  cidade        TEXT NOT NULL DEFAULT '',
+  uf            TEXT NOT NULL DEFAULT '',
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Faturamento do ERP: um valor por CNPJ, mês e empresa. Liga com as lojas atendidas pelo CNPJ.
+CREATE TABLE IF NOT EXISTS faturamento_erp (
+  cnpj          TEXT NOT NULL,
   mes           TEXT NOT NULL,
   empresa       TEXT NOT NULL DEFAULT '',
   valor         NUMERIC(14,2) NOT NULL,
   importacao_id INTEGER REFERENCES importacoes(id) ON DELETE SET NULL,
-  UNIQUE (loja_id, mes, empresa)
+  PRIMARY KEY (cnpj, mes, empresa)
 );
+CREATE INDEX IF NOT EXISTS faturamento_erp_mes ON faturamento_erp (mes);
 
 -- Atendimento de um promotor em uma loja em um mês: quantas visitas e quanto custou.
 -- "custo" vazio (NULL) = usar o custo fixo do cadastro do promotor, dividido pelas visitas.
@@ -134,9 +147,55 @@ ALTER TABLE visitas ADD COLUMN IF NOT EXISTS supervisor  TEXT NOT NULL DEFAULT '
 ALTER TABLE visitas ADD COLUMN IF NOT EXISTS observacao  TEXT NOT NULL DEFAULT '';
 `;
 
+// Versão anterior: o faturamento era guardado POR LOJA (tabela "faturamento"), e cada CNPJ do ERP virava uma
+// loja. Agora o faturamento é guardado POR CNPJ (tabela "faturamento_erp") e dividido entre as lojas atendidas
+// na hora do cálculo. Esta migração converte os dados antigos uma única vez, numa transação só (se algo der
+// errado, nada muda). Antes, guarda uma cópia do faturamento antigo em "backup_faturamento_por_loja".
+async function migrarFaturamentoPorCnpj() {
+  const [{ existe }] = await consulta("SELECT to_regclass('public.faturamento') IS NOT NULL AS existe");
+  if (existe) {
+    await transacao(async (rodar) => {
+      await rodar(`CREATE TABLE IF NOT EXISTS backup_faturamento_por_loja AS
+        SELECT f.loja_id, f.mes, f.empresa, f.valor, f.importacao_id, l.nome AS loja_nome, l.cnpj, l.cidade, l.uf
+        FROM faturamento f JOIN lojas l ON l.id = f.loja_id`);
+      await rodar(`INSERT INTO clientes_erp (cnpj, nome, cidade, uf)
+        SELECT DISTINCT ON (l.cnpj) l.cnpj, l.nome, l.cidade, l.uf
+        FROM faturamento f JOIN lojas l ON l.id = f.loja_id
+        WHERE coalesce(l.cnpj, '') <> '' ORDER BY l.cnpj, l.id
+        ON CONFLICT (cnpj) DO NOTHING`);
+      await rodar(`INSERT INTO faturamento_erp (cnpj, mes, empresa, valor, importacao_id)
+        SELECT l.cnpj, f.mes, f.empresa, sum(f.valor), max(f.importacao_id)
+        FROM faturamento f JOIN lojas l ON l.id = f.loja_id
+        WHERE coalesce(l.cnpj, '') <> '' GROUP BY l.cnpj, f.mes, f.empresa
+        ON CONFLICT DO NOTHING`);
+      await rodar('DROP TABLE faturamento');
+      // Lojas que só existiam por causa do faturamento (nenhum atendimento): agora são clientes do ERP.
+      await rodar('DELETE FROM lojas l WHERE NOT EXISTS (SELECT 1 FROM visitas v WHERE v.loja_id = l.id)');
+    });
+  }
+
+  // O CNPJ deixa de ser único entre as lojas; quem identifica a loja passa a ser a "chave".
+  await consulta('ALTER TABLE lojas DROP CONSTRAINT IF EXISTS lojas_cnpj_key');
+  await consulta('ALTER TABLE lojas ADD COLUMN IF NOT EXISTS chave TEXT');
+  const semChave = await consulta('SELECT id, nome, cnpj, cidade FROM lojas WHERE chave IS NULL ORDER BY id');
+  if (semChave.length) {
+    const usadas = new Set((await consulta('SELECT chave FROM lojas WHERE chave IS NOT NULL')).map((l) => l.chave));
+    const ids = []; const chaves = [];
+    for (const l of semChave) {
+      let chave = chaveDaLoja(l.cnpj, l.nome, l.cidade);
+      if (usadas.has(chave)) chave = `${chave}#${l.id}`; // nunca deve acontecer, mas não pode travar o sistema
+      usadas.add(chave);
+      ids.push(l.id); chaves.push(chave);
+    }
+    await consulta('UPDATE lojas SET chave = t.chave FROM unnest($1::int[], $2::text[]) AS t(id, chave) WHERE lojas.id = t.id', [ids, chaves]);
+  }
+  await consulta('CREATE UNIQUE INDEX IF NOT EXISTS lojas_chave ON lojas (chave)');
+}
+
 async function iniciarBanco() {
   await consulta(TABELAS);
   await consulta(ATUALIZACOES);
+  await migrarFaturamentoPorCnpj();
 }
 
 async function fecharBanco() {

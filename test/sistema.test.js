@@ -13,7 +13,47 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   const { criarApp } = require('../src/app');
   const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
 
-  await consulta('DROP TABLE IF EXISTS visitas, faturamento, importacoes, promotores, lojas, usuarios CASCADE');
+  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja,
+    importacoes, promotores, lojas, usuarios CASCADE`);
+
+  // Migração: um banco no formato antigo (faturamento por loja, CNPJ único na loja) tem que virar o novo
+  // sem perder nada. É o que acontece no banco do Render quando esta versão é publicada.
+  await apagarTudo();
+  await consulta(`
+    CREATE TABLE lojas (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, cnpj TEXT UNIQUE, cidade TEXT NOT NULL DEFAULT '',
+      uf TEXT NOT NULL DEFAULT '', endereco TEXT NOT NULL DEFAULT '', criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE TABLE promotores (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, tipo TEXT NOT NULL, agencia TEXT NOT NULL DEFAULT '');
+    CREATE TABLE importacoes (id SERIAL PRIMARY KEY, tipo TEXT NOT NULL);
+    CREATE TABLE faturamento (id SERIAL PRIMARY KEY, loja_id INTEGER NOT NULL REFERENCES lojas(id) ON DELETE CASCADE, mes TEXT NOT NULL,
+      empresa TEXT NOT NULL DEFAULT '', valor NUMERIC(14,2) NOT NULL, importacao_id INTEGER REFERENCES importacoes(id), UNIQUE (loja_id, mes, empresa));
+    CREATE TABLE visitas (id SERIAL PRIMARY KEY, promotor_id INTEGER NOT NULL REFERENCES promotores(id) ON DELETE CASCADE,
+      loja_id INTEGER NOT NULL REFERENCES lojas(id) ON DELETE CASCADE, mes TEXT NOT NULL, qtd_visitas INTEGER NOT NULL DEFAULT 0,
+      custo NUMERIC(12,2), importacao_id INTEGER REFERENCES importacoes(id), UNIQUE (promotor_id, loja_id, mes));
+    INSERT INTO lojas (nome, cnpj, cidade, uf) VALUES ('Loja Atendida', '11222333000181', 'Joinville', 'SC'),
+      ('Só do ERP', '22222333000106', 'Curitiba', 'PR'), ('Sem CNPJ', NULL, 'Lapa', 'PR');
+    INSERT INTO promotores (nome, tipo, agencia) VALUES ('Ana', 'AGENCIA', 'X');
+    INSERT INTO importacoes (tipo) VALUES ('faturamento');
+    INSERT INTO faturamento (loja_id, mes, empresa, valor, importacao_id) VALUES (1, '2026-10', '60', 1000, 1), (1, '2026-10', '63', 500, 1),
+      (2, '2026-10', '60', 700, 1), (3, '2026-10', '', 50, 1);
+    INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas, custo) VALUES (1, 1, '2026-10', 4, 30), (1, 3, '2026-10', 4, 20);
+  `);
+  await iniciarBanco();
+  await iniciarBanco(); // rodar de novo não pode repetir nem quebrar a migração
+  assert.deepEqual(await consulta('SELECT cnpj, mes, empresa, valor FROM faturamento_erp ORDER BY cnpj, empresa'), [
+    { cnpj: '11222333000181', mes: '2026-10', empresa: '60', valor: 1000 },
+    { cnpj: '11222333000181', mes: '2026-10', empresa: '63', valor: 500 },
+    { cnpj: '22222333000106', mes: '2026-10', empresa: '60', valor: 700 },
+  ]);
+  assert.deepEqual((await consulta('SELECT cnpj, nome FROM clientes_erp ORDER BY cnpj')).map((c) => c.nome), ['Loja Atendida', 'Só do ERP']);
+  assert.deepEqual((await consulta('SELECT nome, chave FROM lojas ORDER BY id')), [
+    { nome: 'Loja Atendida', chave: '11222333000181|loja atendida|joinville' },
+    { nome: 'Sem CNPJ', chave: '|sem cnpj|lapa' }, // a loja "Só do ERP" virou cliente do ERP (não tinha atendimento)
+  ]);
+  assert.equal((await consulta('SELECT count(*)::int AS n FROM visitas'))[0].n, 2);
+  assert.equal((await consulta('SELECT count(*)::int AS n FROM backup_faturamento_por_loja'))[0].n, 4); // cópia de segurança
+  assert.equal((await consulta("SELECT to_regclass('public.faturamento') AS t"))[0].t, null);
+
+  await apagarTudo();
   await iniciarBanco();
   await auth.criarUsuario({ login: 'suporte', nome: 'Suporte', senha: 'senha-suporte', perfil: 'suporte' });
   await auth.criarUsuario({ login: 'regis', nome: 'Regis', senha: 'senha-regis', perfil: 'usuario' });
@@ -25,7 +65,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   // Pequeno "navegador": guarda o cookie do login e manda nas chamadas seguintes.
   const sessao = () => {
     let cookie = '';
-    return async (caminho, opcoes = {}) => {
+    const chamar = async (caminho, opcoes = {}) => {
       const headers = { ...(opcoes.headers || {}), cookie };
       if (opcoes.json) { headers['content-type'] = 'application/json'; opcoes.body = JSON.stringify(opcoes.json); }
       const r = await fetch(base + caminho, { ...opcoes, headers });
@@ -33,6 +73,8 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
       if (novos.length) cookie = novos.map((c) => c.split(';')[0]).join('; ');
       return { status: r.status, dados: await r.json().catch(() => null) };
     };
+    chamar.cookie = () => cookie;
+    return chamar;
   };
   // Faz o mesmo caminho da tela Importar: converte o .xlsx, reconhece as colunas, soma as linhas e manda gravar.
   const importar = async (chamar, tipo, arquivo, opcoes = {}) => {
@@ -86,7 +128,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     ]);
     const r3 = await importar(regis, 'faturamento', fat);
     assert.equal(r3.importadas, 2); // duas lojas (as duas notas do Mercado Um foram somadas)
-    assert.equal(r3.lojasNovas, 0); // achou as lojas pelo CNPJ
+    assert.equal(r3.clientesNovos, 2); // dois CNPJs novos no ERP; o faturamento liga com as lojas pelo CNPJ
     await importar(regis, 'faturamento', fat); // repetir não soma em dobro
 
     const resumo = (await regis('/api/resumo?de=2026-10&ate=2026-10')).dados;
@@ -104,7 +146,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal(fora.length, 1);
 
     // Ficha da loja (abre ao clicar numa loja em Faturamento): faturamento mês a mês e quem atende.
-    const ficha = (await regis(`/api/lojas/${fora[0].loja.id}?de=2026-09&ate=2026-10`)).dados;
+    const ficha = (await regis(`/api/lojas/${fora[0].id}?de=2026-09&ate=2026-10`)).dados;
     assert.equal(ficha.loja.cnpj, '22222333000106');
     assert.deepEqual(ficha.porMes.map((m) => [m.mes, m.faturamento, m.custo, m.situacao]), [['2026-10', 1000, 100, 'fora']]);
     assert.deepEqual(ficha.promotores.map((p) => [p.nome, p.custo, p.percentual]), [['Agência Teste', 100, 10]]);
@@ -120,7 +162,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal((await gravar([])).status, 400);
     assert.equal((await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'outro', itens: [bom] } })).status, 400);
     // Como todas as tentativas falharam, o "Mercado Três" não pode ter sido cadastrado.
-    const [{ total }] = await consulta("SELECT count(*)::int AS total FROM lojas WHERE cnpj = '33333444000106'");
+    const [{ total }] = await consulta("SELECT count(*)::int AS total FROM clientes_erp WHERE cnpj = '33333444000106'");
     assert.equal(total, 0);
   });
 
@@ -150,7 +192,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal(m.agencia, 'Filial PR (CLT)'); // manteve a agência que veio dos atendimentos
     assert.equal(m.qtdLojas, 2);
     assert.equal(m.custo, 3650); // salário + adicionais, dividido entre as duas lojas
-    assert.equal(m.situacao, 'sem_faturamento'); // lojas sem CNPJ não ligam com o faturamento do Focco
+    assert.equal(m.situacao, 'sem_cnpj'); // lojas sem CNPJ não ligam com o faturamento do Focco: faturamento zero
     const detalhe = (await regis(`/api/promotores/${m.id}?de=2026-10&ate=2026-10`)).dados;
     assert.deepEqual(detalhe.lojas.map((l) => [l.custo, l.dias]).sort(), [[1825, 'Qua'], [1825, 'Seg']]);
     // Carlos tem salário mas nenhuma loja lançada: o custo aparece, marcado como "sem lojas".
@@ -172,6 +214,46 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     // "iniciarBanco" roda toda vez que o servidor liga. Tem que funcionar com as tabelas já cheias.
     await iniciarBanco();
     await iniciarBanco();
+  });
+
+  await t.test('CNPJ em duas lojas: o faturamento é dividido; Lojas por UF, Agências e exportações batem', async () => {
+    const gravar = (tipo, itens) => regis('/api/importar/gravar', { method: 'POST', json: { tipo, arquivo: 'rede.xlsx', itens } });
+    const rede = (nome) => ({ nome, cnpj: '55555666000106', cidade: 'Curitiba', uf: 'Paraná' });
+    const p = { nome: 'Promotora Rede', tipo: 'MEI', agencia: 'MEI Rede' };
+    const r = (await gravar('visitas', [
+      { promotor: p, loja: rede('Rede Centro'), mes: '2026-08', visitas: 4, custo: 100 },
+      { promotor: p, loja: rede('Rede Bairro'), mes: '2026-08', visitas: 4, custo: 100 },
+    ])).dados;
+    assert.equal(r.lojasNovas, 2); // mesmo CNPJ, nomes diferentes: duas lojas
+    await gravar('faturamento', [{ loja: { cnpj: '55555666000106', nome: 'REDE MATRIZ', cidade: 'Curitiba', uf: 'PR' }, mes: '2026-08', empresa: '60', valor: 20000 }]);
+    const periodo = 'de=2026-08&ate=2026-08';
+    const fat = (await regis(`/api/faturamento?${periodo}`)).dados;
+    assert.deepEqual(fat.lojas.map((l) => [l.nome, l.faturamento, l.lojasDoCnpj]).sort(), [['Rede Bairro', 10000, 2], ['Rede Centro', 10000, 2]]);
+    assert.equal(fat.totais.faturamento, 20000);
+    assert.ok(fat.avisos.some((a) => a.id === 'cnpj_dividido'));
+
+    const uf = (await regis(`/api/lojas-uf?${periodo}&uf=PR`)).dados;
+    assert.deepEqual(uf.ufs, [{ uf: 'PR', lojas: 2 }]); // "Paraná" virou PR
+    assert.deepEqual(uf.linhas.map((l) => [l.loja, l.valores['2026-08'], l.total, l.custo, l.faturamento, l.situacao]).sort(),
+      [['Rede Bairro', 100, 100, 100, 10000, 'dentro'], ['Rede Centro', 100, 100, 100, 10000, 'dentro']]);
+    const ag = (await regis(`/api/agencias?${periodo}`)).dados;
+    assert.deepEqual([ag.faturamento, ag.custo, ag.percentual, ag.situacao], [20000, 200, 1, 'vale']);
+    assert.deepEqual(ag.agencias.map((a) => [a.nome, a.qtdPromotores, a.qtdLojas, a.promotores[0].lojas.length]), [['MEI Rede', 1, 2, 2]]);
+
+    const loja = fat.lojas.find((l) => l.nome === 'Rede Centro');
+    const ficha = (await regis(`/api/lojas/${loja.id}?${periodo}`)).dados;
+    assert.deepEqual(ficha.porMes.map((m) => [m.faturamentoCnpj, m.lojasDoCnpj, m.faturamento]), [[20000, 2, 10000]]);
+    assert.deepEqual(ficha.outrasLojasDoCnpj.map((o) => o.nome), ['Rede Bairro']);
+    const cliente = (await regis(`/api/clientes/55555666000106?${periodo}`)).dados;
+    assert.deepEqual([cliente.faturamento, cliente.lojas.length], [20000, 2]);
+    assert.equal((await regis(`/api/clientes/123?${periodo}`)).status, 400);
+    assert.equal((await regis(`/api/clientes/99999999000199?${periodo}`)).status, 404);
+
+    for (const caminho of ['/api/faturamento/exportar', '/api/promotores-exportar', '/api/lojas-uf/exportar', '/api/agencias/exportar']) {
+      const resposta = await fetch(`${base}${caminho}?${periodo}`, { headers: { cookie: regis.cookie() } });
+      assert.equal(resposta.status, 200, caminho);
+      assert.match(resposta.headers.get('content-type'), /spreadsheetml/, caminho);
+    }
   });
 
   await t.test('endereço ou corpo inválido responde 400, sem revelar detalhes do banco', async () => {
@@ -228,14 +310,14 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   });
 
   await t.test('desfazer importação apaga só o que veio dela; excluir promotor leva os atendimentos', async () => {
-    const item = (valor) => ({ loja: { nome: 'Loja Desfazer', cnpj: '', cidade: 'X' }, mes: '2026-07', empresa: '', valor });
+    const item = (valor) => ({ loja: { nome: 'Cliente Desfazer', cnpj: '44444555000106', cidade: 'X' }, mes: '2026-07', empresa: '', valor });
     await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'faturamento', arquivo: 'a', itens: [item(100)] } });
     const antes = (await regis('/api/importacoes')).dados[0];
     assert.equal(antes.total, 100);
     assert.equal((await regis('/api/faturamento?de=2026-07&ate=2026-07')).dados.totais.faturamento, 100);
     const r = await regis(`/api/importacoes/${antes.id}`, { method: 'DELETE' });
     assert.deepEqual([r.status, r.dados.registros], [200, 1]);
-    assert.equal((await regis('/api/faturamento?de=2026-07&ate=2026-07')).dados.totais.faturamento, 0);
+    assert.equal((await regis('/api/faturamento?de=2026-07&ate=2026-07')).dados.totais.faturamento, null); // nada no mês: "—"
     assert.equal((await regis(`/api/importacoes/${antes.id}`, { method: 'DELETE' })).status, 404);
 
     const pedro = (await regis('/api/promotores?de=2026-10&ate=2026-10&busca=PEDRO')).dados.promotores[0];
