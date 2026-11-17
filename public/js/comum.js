@@ -92,7 +92,7 @@ async function apiComMemoria(url, desenhar) {
 function desenharMenu(usuario) {
   const paginas = [
     ['/resumo', 'Resumo'], ['/faturamento', 'Faturamento'], ['/promotores', 'Promotores'], ['/lojas-uf', 'Lojas por UF'],
-    ['/agencias', 'Agências'], ['/importar', 'Importar'],
+    ['/agencias', 'Agências'], ['/supervisores', 'Supervisores'], ['/importar', 'Importar'],
   ];
   if (usuario.perfil === 'suporte') paginas.push(['/usuarios', 'Usuários']);
   // A ficha do promotor e a da loja ficam "dentro" de Promotores e de Faturamento no menu.

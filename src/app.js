@@ -6,6 +6,7 @@ const config = require('./config');
 const { consulta } = require('./db');
 const auth = require('./auth');
 const relatorios = require('./relatorios');
+const supervisores = require('./supervisores');
 const planilha = require('./planilha');
 const {
   gravarFaturamento, gravarVisitas, gravarPromotores, previaDaImportacao, listarImportacoes, desfazerImportacao, ErroDeImportacao, NaoEncontrado,
@@ -58,7 +59,7 @@ function criarApp() {
 
   // As telas só abrem para quem está logado (a de Usuários, só para o suporte). Os dados já eram protegidos
   // pela API; isto evita que alguém sem login veja até a "casca" das telas.
-  app.get(/^\/(resumo|faturamento|loja|promotores|promotor|lojas-uf|agencias|importar|usuarios|conta)(\.html)?\/?$/, async (req, res, next) => {
+  app.get(/^\/(resumo|faturamento|loja|promotores|promotor|lojas-uf|agencias|supervisores|importar|usuarios|conta)(\.html)?\/?$/, async (req, res, next) => {
     const usuario = await auth.usuarioDaSessao(req);
     if (!usuario) return res.redirect('/login');
     if (req.path.startsWith('/usuarios') && usuario.perfil !== 'suporte') return res.redirect('/resumo');
@@ -123,6 +124,26 @@ function criarApp() {
   api.get('/promotores', async (req, res) => res.json(await relatorios.listaDePromotores(req.query)));
   api.get('/lojas-uf', async (req, res) => res.json(await relatorios.lojasPorUf(req.query)));
   api.get('/agencias', async (req, res) => res.json(await relatorios.agencias(req.query)));
+
+  // Promotores que a importação não identificou com certeza, e a ligação feita à mão (fica guardada).
+  api.get('/promotores/nao-identificados', async (req, res) => res.json(await supervisores.naoIdentificados()));
+  api.post('/promotores/:id/ligar', async (req, res) => {
+    res.json({ ok: true, ...(await supervisores.ligarPromotor(Number(req.params.id), Number(req.body.destinoId))) });
+  });
+
+  // ---------- Supervisores ----------
+  api.get('/supervisores', async (req, res) => res.json(await relatorios.supervisoresDoPeriodo(req.query)));
+  api.post('/supervisores', async (req, res) => {
+    await supervisores.criarSupervisor(req.body);
+    res.json({ ok: true });
+  });
+  api.delete('/supervisores/:id', async (req, res) => {
+    if (!(await supervisores.excluirSupervisor(Number(req.params.id)))) return res.status(404).json({ erro: 'Supervisor não encontrado.' });
+    res.json({ ok: true });
+  });
+  // Mover para o cadastro de supervisores os promotores com cargo de supervisor (só o suporte; a tela pede confirmação).
+  api.get('/supervisores/mover', auth.exigirSuporte, async (req, res) => res.json(await supervisores.candidatosAMover()));
+  api.post('/supervisores/mover', auth.exigirSuporte, async (req, res) => res.json(await supervisores.moverParaSupervisores(req.body.ids)));
 
   api.get('/promotores/:id', async (req, res) => {
     const detalhe = await relatorios.detalheDoPromotor(Number(req.params.id), req.query);
@@ -300,7 +321,7 @@ function criarApp() {
   // Só a mais recente de cada mês/tipo; a do cadastro de promotores não pode ser desfeita.
   api.delete('/importacoes/:id', async (req, res) => {
     try {
-      res.json({ ok: true, ...(await desfazerImportacao(Number(req.params.id))) });
+      res.json({ ok: true, ...(await desfazerImportacao(Number(req.params.id), String(req.query.confirmacao || ''))) });
     } catch (erro) {
       if (erro instanceof NaoEncontrado) return res.status(404).json({ erro: erro.message });
       throw erro;

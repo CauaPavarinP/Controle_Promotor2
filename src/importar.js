@@ -3,7 +3,7 @@
 // "itens" prontos. Mesmo assim conferimos tudo de novo: o servidor nunca confia no que vem do navegador.
 const { transacao, consulta } = require('./db');
 const {
-  mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
+  mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, normalizar, ehSupervisor, acharPorNome, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
 } = require('./planilha');
 
 class ErroDeImportacao extends Error {}
@@ -225,25 +225,54 @@ async function gravarFaturamento(dados, usuario) {
 // só está no cadastro, a empresa.
 const SQL_AGENCIA = "lower(coalesce(nullif(p.agencia, ''), nullif(p.empresa, ''), 'Sem agência'))";
 
-// Carrega o cadastro de promotores e devolve uma forma de achar "o mesmo promotor" que veio na planilha.
-// Regra para ser o mesmo:
-//   1º) mesmo código E mesmo primeiro nome. O código é comparado sem zeros à esquerda ("06" = "6"), porque o
-//       Excel tira o zero quando a coluna é número. O código sozinho se repete entre empresas; e nas planilhas
-//       de atendimento vem só o primeiro nome, enquanto o cadastro traz o nome completo;
+// Carrega o cadastro de promotores e devolve duas formas de achar "o mesmo promotor" que veio na planilha.
+//
+// achar (usada no CADASTRO de promotores):
+//   1º) mesmo código E mesmo primeiro nome (código sem zeros à esquerda: "06" = "6");
 //   2º) mesmo nome e mesma agência.
+//
+// identificar (usada nos ATENDIMENTOS; nem todo CLT, MEI ou promotor de agência tem código):
+//   1º) com código: código + primeiro nome;
+//   2º) ligação feita à mão na tela (nome da planilha + agência -> promotor);
+//   3º) nome completo + agência (sem acento, sem diferenciar maiúsculas);
+//   4º) primeiro nome + agência ou empresa, mas SÓ se houver um único promotor que bata.
+//   Com mais de um, não adivinha: devolve "ambiguo" e a lista de candidatos.
 async function carregarPromotores(rodar) {
   const porId = new Map();
   const lista = [];
   const incluir = (p) => { porId.set(p.id, p); lista.push(p); };
   for (const p of await rodar('SELECT * FROM promotores ORDER BY id')) incluir(p);
-  const achar = ({ nome, agencia = '', codigo = '' }) => {
-    const primeiro = primeiroNome(nome);
+  const vinculos = new Map();
+  for (const v of await rodar('SELECT nome, agencia, promotor_id FROM vinculos_promotor')) vinculos.set(`${v.nome}|${v.agencia}`, v.promotor_id);
+
+  const porCodigo = ({ nome, codigo = '' }) => {
     const cod = codigoNormal(codigo);
-    return (cod && lista.find((p) => codigoNormal(p.codigo) === cod && primeiroNome(p.nome) === primeiro))
-      || lista.find((p) => p.nome.toLowerCase() === nome.toLowerCase() && p.agencia.toLowerCase() === agencia.toLowerCase())
-      || null;
+    const primeiro = primeiroNome(nome);
+    return (cod && lista.find((p) => codigoNormal(p.codigo) === cod && primeiroNome(p.nome) === primeiro)) || null;
   };
-  return { porId, achar, incluir };
+
+  const achar = ({ nome, agencia = '', codigo = '' }) => porCodigo({ nome, codigo })
+    || lista.find((p) => p.nome.toLowerCase() === nome.toLowerCase() && p.agencia.toLowerCase() === agencia.toLowerCase())
+    || null;
+
+  const identificar = ({ nome, agencia = '', codigo = '' }) => {
+    const peloCodigo = porCodigo({ nome, codigo });
+    if (peloCodigo) return { promotor: peloCodigo };
+    const ag = normalizar(agencia);
+    const vinculo = vinculos.get(`${normalizar(nome)}|${ag}`);
+    if (vinculo && porId.has(vinculo)) return { promotor: porId.get(vinculo) };
+    // O próprio promotor pendente de uma importação anterior também conta: assim não duplica a cada importação.
+    const completo = lista.find((p) => normalizar(p.nome) === normalizar(nome) && normalizar(p.agencia) === ag);
+    if (completo) return { promotor: completo };
+    const primeiro = primeiroNome(nome);
+    const candidatos = lista.filter((p) => !p.pendente && primeiroNome(p.nome) === primeiro
+      && ag && (normalizar(p.agencia) === ag || normalizar(p.empresa) === ag));
+    if (candidatos.length === 1) return { promotor: candidatos[0] };
+    if (candidatos.length > 1) return { promotor: null, motivo: 'ambiguo', candidatos };
+    return { promotor: null, motivo: 'nao_encontrado', candidatos: [] };
+  };
+
+  return { porId, lista, achar, identificar, incluir };
 }
 
 // Cadastro de promotores com os custos mensais (aba "Promotores CLT" do modelo).
@@ -272,13 +301,33 @@ function prepararPromotores(dados) {
   return { registro, itens };
 }
 
+// Grava (ou atualiza) um supervisor pelo nome sem acento. Devolve true se for novo.
+async function gravarSupervisor(rodar, { nome, codigo = '', cargo = '', empresa = '' }) {
+  const [r] = await rodar(
+    `INSERT INTO supervisores (nome, chave, codigo, cargo, empresa) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (chave) DO UPDATE SET nome = EXCLUDED.nome,
+       codigo = CASE WHEN EXCLUDED.codigo <> '' THEN EXCLUDED.codigo ELSE supervisores.codigo END,
+       cargo = CASE WHEN EXCLUDED.cargo <> '' THEN EXCLUDED.cargo ELSE supervisores.cargo END,
+       empresa = CASE WHEN EXCLUDED.empresa <> '' THEN EXCLUDED.empresa ELSE supervisores.empresa END
+     RETURNING (xmax = 0) AS novo`,
+    [nome, normalizar(nome), codigo, cargo, empresa],
+  );
+  return r.novo;
+}
+
 async function gravarPromotores(dados, usuario) {
-  const { registro, itens } = prepararPromotores(dados);
+  const { registro, itens: todos } = prepararPromotores(dados);
+  // Supervisor não é promotor: entra só no cadastro de supervisores (nome, código, cargo e empresa).
+  const supervisores = todos.filter((p) => ehSupervisor(p.cargo));
+  const itens = todos.filter((p) => !ehSupervisor(p.cargo));
   const COLUNAS = ['nome', 'cargo', 'tipo', 'agencia', 'codigo', 'empresa', 'regiao', 'admissao', ...CAMPOS_DINHEIRO];
   return transacao(async (rodar) => {
     const importacaoId = await registrarImportacao(rodar, 'promotores', dados.arquivo, usuario);
     const cadastro = await carregarPromotores(rodar);
-    const contagem = { promotoresNovos: 0, promotoresAtualizados: 0 };
+    const contagem = { promotoresNovos: 0, promotoresAtualizados: 0, supervisoresNovos: 0, supervisoresAtualizados: 0 };
+    for (const sup of supervisores) {
+      if (await gravarSupervisor(rodar, sup)) contagem.supervisoresNovos++; else contagem.supervisoresAtualizados++;
+    }
     let total = 0;
     for (const p of itens) {
       const valores = COLUNAS.map((coluna) => p[coluna]);
@@ -308,11 +357,11 @@ async function gravarPromotores(dados, usuario) {
       total += CAMPOS_DINHEIRO.reduce((soma, campo) => soma + p[campo], 0);
     }
     const resultado = {
-      importadas: itens.length,
+      importadas: todos.length,
       ignoradas: Object.values(registro.motivos).reduce((a, b) => a + b, 0),
       ...registro,
       ...contagem,
-      total: conferirTotal(total), // soma dos custos mensais de todos os promotores do arquivo
+      total: conferirTotal(total), // soma dos custos mensais dos promotores do arquivo (sem os supervisores)
       meses: [],
     };
     await fecharImportacao(rodar, importacaoId, resultado);
@@ -357,12 +406,14 @@ function escopoDasVisitas(itens, cadastro) {
   const encontrados = new Map(); // item.promotor -> promotor do banco (ou null)
   for (const { promotor: p } of itens) {
     if (encontrados.has(p)) continue;
-    const achado = p.id ? cadastro.porId.get(p.id) || null : cadastro.achar(p);
+    const achado = p.id ? cadastro.porId.get(p.id) || null : cadastro.identificar(p).promotor;
     encontrados.set(p, achado);
     // O promotor achado entra pelo id dele. As agências vêm SÓ do texto do arquivo: a agência que o promotor
     // tem no banco pode ser de outra empresa (CLT achado pelo código), e não pode ter o mês apagado.
     if (achado) ids.add(achado.id);
-    if (!p.id) agencias.add((p.agencia || 'Sem agência').toLowerCase());
+    // Linha sem agência (ex.: MEI): entra só o próprio promotor (pelo id), nunca o grupo "Sem agência" inteiro,
+    // senão o arquivo de um MEI apagaria o mês dos outros MEIs.
+    if (!p.id && p.agencia) agencias.add(p.agencia.toLowerCase());
   }
   return { agencias: [...agencias], ids: [...ids], encontrados };
 }
@@ -382,6 +433,7 @@ async function gravarVisitas(dados, usuario) {
 
     // Promotor de cada item: o que já existe ou um novo. Conta quem veio com código e não achou cadastro.
     const codigosSemCadastro = new Set();
+    const naoIdentificados = new Set();
     const promotores = new Map();
     const acharPromotor = async (p) => {
       const chave = p.id ? `id:${p.id}` : `${codigoNormal(p.codigo)}|${p.nome.toLowerCase()}|${p.agencia.toLowerCase()}`;
@@ -391,8 +443,9 @@ async function gravarVisitas(dados, usuario) {
         if (!cadastro.porId.has(p.id)) throw new ErroDeImportacao('O promotor escolhido não existe mais.');
         id = p.id;
       } else {
-        const existente = cadastro.achar(p);
+        const { promotor: existente, motivo } = cadastro.identificar(p);
         if (p.codigo && !(existente && existente.cadastrado)) codigosSemCadastro.add(`${codigoNormal(p.codigo)}|${primeiroNome(p.nome)}`);
+        if (existente && existente.pendente) naoIdentificados.add(existente.id);
         if (existente) {
           id = existente.id;
           // Promotor que veio só do cadastro (sem agência): passa a ter a agência da planilha de atendimentos.
@@ -401,9 +454,16 @@ async function gravarVisitas(dados, usuario) {
             existente.agencia = p.agencia;
           }
         } else {
-          const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia, codigo) VALUES ($1, $2, $3, $4) RETURNING *', [p.nome, p.tipo, p.agencia, p.codigo]);
+          // Não identificado. Fica "pendente" (aparece no aviso e pode ser ligado à mão na tela) quando:
+          //  - há mais de um parecido no cadastro (não adivinhamos), ou
+          //  - é CLT e não está no cadastro (CLT deveria estar; sem cadastro não há salário).
+          // Promotor de agência, MEI ou freelancer que não existe ainda é só um promotor novo.
+          const pendente = motivo === 'ambiguo' || p.tipo === 'CLT' ? motivo : '';
+          const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia, codigo, pendente) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [p.nome, p.tipo, p.agencia, p.codigo, pendente]);
           cadastro.incluir(criado);
           id = criado.id;
+          if (pendente) naoIdentificados.add(id);
           contagem.promotoresNovos++;
         }
       }
@@ -447,6 +507,11 @@ async function gravarVisitas(dados, usuario) {
       );
     }
     if (codigosSemCadastro.size) registro.avisos['Promotor com código que não está no cadastro (sem salário para calcular o custo)'] = codigosSemCadastro.size;
+    if (naoIdentificados.size) registro.avisos['Promotor não identificado (ligue à mão na tela Promotores)'] = naoIdentificados.size;
+    // Supervisor da planilha que não acha ninguém no cadastro de supervisores (nome completo ou primeiro nome único).
+    const supervisores = await rodar('SELECT id, nome FROM supervisores');
+    const semCadastro = new Set(itens.map((i) => i.supervisor).filter((nome) => nome && !acharPorNome(nome, supervisores)).map(normalizar));
+    if (semCadastro.size) registro.avisos['Supervisor da planilha que não está no cadastro de supervisores'] = semCadastro.size;
     const resultado = montarResultado(registros, registro, { ...contagem, substituidas: antigas.length }, 'custo');
     await fecharImportacao(rodar, importacaoId, resultado);
     return resultado;
@@ -481,12 +546,16 @@ async function previaDaImportacao(dados) {
     };
   }
   if (tipo === 'promotores') {
-    const { itens } = prepararPromotores(dados);
+    const { itens: todos } = prepararPromotores(dados);
+    const itens = todos.filter((p) => !ehSupervisor(p.cargo));
+    const supervisores = todos.length - itens.length;
     const cadastro = await carregarPromotores(consulta);
     const atualizados = itens.filter((p) => cadastro.achar(p)).length;
     return {
       linhas: [],
-      mensagem: `Isto vai atualizar ${atualizados} promotor(es) já cadastrado(s) (salário e adicionais passam a ser os do arquivo) e criar ${itens.length - atualizados} novo(s). A importação do cadastro não pode ser desfeita.`,
+      mensagem: `Isto vai atualizar ${atualizados} promotor(es) já cadastrado(s) (salário e adicionais passam a ser os do arquivo) e criar ${itens.length - atualizados} novo(s).`
+        + `${supervisores ? ` ${supervisores} supervisor(es) vão para o cadastro de supervisores (sem salário nem custo).` : ''}`
+        + ' A importação do cadastro não pode ser desfeita.',
     };
   }
   throw new ErroDeImportacao('Tipo de importação inválido.');
@@ -516,10 +585,14 @@ async function listarImportacoes() {
 class NaoEncontrado extends Error {}
 
 // Apaga o que a importação gravou e restaura o que ela tinha substituído, numa transação só.
-async function desfazerImportacao(id) {
+// Importação antiga (sem cópia): o dado anterior não volta, então só apaga se a pessoa digitar "APAGAR".
+async function desfazerImportacao(id, confirmacao = '') {
   return transacao(async (rodar) => {
     const [imp] = await rodar('SELECT * FROM importacoes WHERE id = $1 FOR UPDATE', [id]);
     if (!imp) throw new NaoEncontrado('Importação não encontrada.');
+    if (!imp.restauravel && imp.tipo !== 'promotores' && confirmacao !== 'APAGAR') {
+      throw new ErroDeImportacao('Esta importação é de antes da cópia de segurança: desfazer só apaga, e o dado anterior não volta. Para apagar mesmo assim, digite APAGAR.');
+    }
     const motivo = motivoParaNaoDesfazer(imp, await rodar('SELECT id, tipo, meses FROM importacoes'));
     if (motivo) throw new ErroDeImportacao(motivo);
     const tabela = { faturamento: 'faturamento_erp', visitas: 'visitas' }[imp.tipo];
@@ -549,6 +622,6 @@ async function desfazerImportacao(id) {
 }
 
 module.exports = {
-  gravarFaturamento, gravarVisitas, gravarPromotores, previaDaImportacao, listarImportacoes, desfazerImportacao,
+  gravarFaturamento, gravarVisitas, gravarPromotores, gravarSupervisor, previaDaImportacao, listarImportacoes, desfazerImportacao,
   ErroDeImportacao, NaoEncontrado,
 };

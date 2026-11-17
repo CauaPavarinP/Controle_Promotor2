@@ -21,18 +21,19 @@ const contem = (valor, busca) => normalizar(valor).includes(busca);
 
 // Busca no banco tudo o que o período tem e devolve a análise (ver calculo.analisar).
 async function carregar({ de, ate }, filtros = {}, empresa = '') {
-  const [promotores, visitas, faturamentos, mesesErp, clientes] = await Promise.all([
+  const [promotores, visitas, faturamentos, mesesErp, clientes, supervisores] = await Promise.all([
     consulta('SELECT * FROM promotores'),
     consulta('SELECT id, promotor_id, loja_id, mes, qtd_visitas, custo, dias_visita, supervisor, status FROM visitas WHERE mes BETWEEN $1 AND $2', [de, ate]),
     consulta("SELECT cnpj, mes, sum(valor) AS valor FROM faturamento_erp WHERE mes BETWEEN $1 AND $2 AND ($3 = '' OR empresa = $3) GROUP BY cnpj, mes", [de, ate, texto(empresa)]),
     consulta('SELECT DISTINCT mes FROM faturamento_erp WHERE mes BETWEEN $1 AND $2', [de, ate]),
     consulta('SELECT c.cnpj, c.nome, c.cidade, c.uf FROM clientes_erp c WHERE EXISTS (SELECT 1 FROM faturamento_erp f WHERE f.cnpj = c.cnpj AND f.mes BETWEEN $1 AND $2)', [de, ate]),
+    consulta('SELECT id, nome, codigo, cargo, empresa FROM supervisores ORDER BY nome'),
   ]);
   const lojas = await consulta('SELECT id, nome, cnpj, cidade, uf FROM lojas WHERE id = ANY($1::int[])', [[...new Set(visitas.map((v) => v.loja_id))]]);
   const analise = calc.analisar({
-    promotores, lojas, visitas, faturamentos, clientes, mesesComErp: mesesErp.map((m) => m.mes), de, ate, filtros, meta: meta(),
+    promotores, lojas, visitas, faturamentos, clientes, supervisores, mesesComErp: mesesErp.map((m) => m.mes), de, ate, filtros, meta: meta(),
   });
-  return { ...analise, cadastro: promotores, lojasPorId: new Map(lojas.map((l) => [l.id, l])) };
+  return { ...analise, supervisores, cadastro: promotores, lojasPorId: new Map(lojas.map((l) => [l.id, l])) };
 }
 
 const soma = (lista, campo) => lista.reduce((total, item) => total + (item[campo] || 0), 0);
@@ -134,6 +135,7 @@ async function listaDePromotores(query) {
   const comFiltroDeLoja = calc.temFiltroDeLoja(a.filtros);
   const busca = normalizar(query.busca);
   const lista = a.cadastro
+    .filter((p) => !ehSupervisor(p.cargo)) // supervisor não é promotor (ver tela Supervisores)
     .filter((p) => calc.promotorPassa({ agencia: agenciaDe(p), tipo: p.tipo }, a.filtros))
     // Com filtro de UF, cidade, supervisor ou mercado, só aparece quem atendeu ali.
     .filter((p) => !comFiltroDeLoja || porPromotor.has(p.id))
@@ -142,7 +144,7 @@ async function listaDePromotores(query) {
       const s = somarPromotor(ls, semLojaPor.get(p.id));
       return {
         id: p.id, nome: p.nome, tipo: p.tipo, agencia: agenciaDe(p), empresa: p.empresa, codigo: p.codigo, ativo: p.ativo,
-        cargo: p.cargo, supervisor: ehSupervisor(p.cargo), cadastrado: p.cadastrado,
+        cargo: p.cargo, cadastrado: p.cadastrado, pendente: p.pendente,
         qtdLojas: new Set(ls.map((l) => l.lojaId)).size,
         visitas: s.visitas, custo: s.custo, custoSemLoja: s.custoSemLoja, faturamento: s.faturamento,
         percentual: s.percentual, situacao: s.situacao,
@@ -311,6 +313,31 @@ async function lojasPorUf(query) {
   };
 }
 
+// ---------- Supervisores ----------
+// De quem cada supervisor é supervisor no período: promotores, agências e lojas dos atendimentos em que o
+// nome dele aparece na coluna "Supervisor". Os nomes da planilha sem cadastro aparecem à parte.
+async function supervisoresDoPeriodo(query) {
+  const a = await carregar(lerPeriodo(query), query, query.empresa);
+  const resumir = (ls) => ({
+    promotores: [...agrupar(ls, (l) => l.promotorId).values()].map((g) => ({ id: g[0].promotorId, nome: g[0].promotorNome, agencia: g[0].agencia }))
+      .sort((x, y) => x.nome.localeCompare(y.nome)),
+    agencias: [...new Set(ls.map((l) => l.agencia))].sort(),
+    lojas: [...agrupar(ls, (l) => l.lojaId).values()].map((g) => ({ id: g[0].lojaId, nome: g[0].lojaNome, cidade: g[0].cidade, uf: g[0].uf }))
+      .sort((x, y) => x.nome.localeCompare(y.nome)),
+  });
+  const porSupervisor = agrupar(a.linhas.filter((l) => l.supervisorId), (l) => l.supervisorId);
+  // Com filtro (ex.: UF), só aparece quem tem atendimento nele; sem filtro, aparece todo o cadastro.
+  const mostrarTodos = !calc.temAlgumFiltro(a.filtros);
+  return {
+    supervisores: a.supervisores
+      .filter((s) => mostrarTodos || porSupervisor.has(s.id))
+      .map((s) => ({ ...s, ...resumir(porSupervisor.get(s.id) || []) })),
+    semCadastro: [...agrupar(a.linhas.filter((l) => l.supervisor && !l.supervisorId), (l) => normalizar(l.supervisor)).values()]
+      .map((ls) => ({ nome: ls[0].supervisor, ...resumir(ls) })),
+    avisos: calc.avisosDe(a),
+  };
+}
+
 // ---------- Agências ----------
 // A agência "vale o que custa" quando o custo do atendimento fica até a meta do faturamento das lojas dela.
 const SITUACAO_DA_AGENCIA = {
@@ -463,6 +490,6 @@ const listaDeLojas = () => consulta('SELECT id, nome, cnpj, cidade FROM lojas OR
 const nomesDosPromotores = () => consulta('SELECT id, nome, tipo, agencia FROM promotores WHERE ativo ORDER BY nome');
 
 module.exports = {
-  resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, detalheDoCliente, lojasPorUf, agencias,
+  resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, detalheDoCliente, lojasPorUf, agencias, supervisoresDoPeriodo,
   salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores,
 };

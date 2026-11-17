@@ -156,6 +156,32 @@ UPDATE promotores SET cadastrado = TRUE
 -- Desfazer importação: cópia das linhas que a importação substituiu, para poder restaurar.
 -- "restauravel" = a importação guardou essa cópia (as feitas antes desta versão não guardaram).
 ALTER TABLE importacoes ADD COLUMN IF NOT EXISTS restauravel BOOLEAN NOT NULL DEFAULT FALSE;
+-- Supervisores: cadastro separado dos promotores (só nome, código, cargo e empresa; sem salário nem custo).
+-- "chave" = nome sem acento e minúsculo. Ligam-se aos atendimentos pela coluna "Supervisor" da planilha.
+CREATE TABLE IF NOT EXISTS supervisores (
+  id        SERIAL PRIMARY KEY,
+  nome      TEXT NOT NULL,
+  chave     TEXT NOT NULL UNIQUE,
+  codigo    TEXT NOT NULL DEFAULT '',
+  cargo     TEXT NOT NULL DEFAULT '',
+  empresa   TEXT NOT NULL DEFAULT '',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Promotor que a importação não conseguiu identificar com certeza:
+-- '' = identificado | 'ambiguo' = mais de um parecido no cadastro | 'nao_encontrado' = CLT que não está no cadastro.
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS pendente TEXT NOT NULL DEFAULT '';
+
+-- Ligação feita à mão na tela: o nome do promotor como vem na planilha (+ agência) é este promotor do cadastro.
+-- Vale para as próximas importações. "nome" e "agencia" ficam sem acento e minúsculos.
+CREATE TABLE IF NOT EXISTS vinculos_promotor (
+  nome        TEXT NOT NULL,
+  agencia     TEXT NOT NULL,
+  promotor_id INTEGER NOT NULL REFERENCES promotores(id) ON DELETE CASCADE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (nome, agencia)
+);
+
 CREATE TABLE IF NOT EXISTS importacoes_backup (
   importacao_id INTEGER NOT NULL REFERENCES importacoes(id) ON DELETE CASCADE,
   tabela        TEXT NOT NULL,

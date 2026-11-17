@@ -13,7 +13,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   const { criarApp } = require('../src/app');
   const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
 
-  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup,
+  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup, supervisores, vinculos_promotor,
     importacoes, promotores, lojas, usuarios CASCADE`);
 
   // Migração: um banco no formato antigo (faturamento por loja, CNPJ único na loja) tem que virar o novo
@@ -348,14 +348,111 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     const lista = (await regis('/api/promotores?de=2026-04&ate=2026-04')).dados.promotores;
     const paulo = lista.find((p) => p.nome === 'Paulo Alves');
     assert.deepEqual([paulo.qtdLojas, paulo.custo, paulo.agencia], [1, 2000, 'Filial SC (CLT)']); // achou pelo código e ganhou a agência
-    const joana = lista.find((p) => p.nome === 'Joana Lima');
-    assert.deepEqual([joana.cargo, joana.supervisor, joana.custo, joana.situacao], ['Sup ll', true, null, 'sem_dados']);
+    // Supervisor não é promotor: foi para o cadastro de supervisores (só nome, código, cargo e empresa).
+    assert.equal(lista.find((p) => p.nome.startsWith('Joana')), undefined);
+    const sups = (await regis('/api/supervisores?de=2026-04&ate=2026-04')).dados.supervisores;
+    assert.ok(sups.some((x) => x.nome === 'Joana Lima' && x.codigo === '07' && x.cargo === 'Sup ll'));
 
     const avisos = (await regis('/api/resumo?de=2026-04&ate=2026-04')).dados.avisos;
     const semCadastro = avisos.find((a) => a.id === 'codigo_sem_cadastro');
     assert.deepEqual(semCadastro.itens, ['Filial SC (CLT) — ZECA (código 99): 1 loja(s)']);
     const semLoja = avisos.find((a) => a.id === 'sem_lojas');
     assert.ok(!semLoja.itens.some((i) => i.startsWith('Joana')), 'supervisor não entra em "Promotores sem loja lançada"');
+  });
+
+  await t.test('supervisores: ligados pelo nome da planilha; tela; filtro; mover promotor com confirmação', async () => {
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    assert.equal((await regis('/api/supervisores', { method: 'POST', json: { nome: 'Jesus Angels Zapata Rivas', codigo: '19' } })).status, 200);
+    assert.equal((await regis('/api/supervisores', { method: 'POST', json: { nome: 'JESUS ANGELS ZAPATA RIVAS' } })).status, 400); // repetido
+    const linha = (loja, supervisor) => ({ promotor: { nome: 'Carla', tipo: 'AGENCIA', agencia: 'Ag Sup' }, loja: { nome: loja, cnpj: '', cidade: 'W' }, mes: '2026-03', visitas: 1, custo: 50, supervisor });
+    const r = (await gravar({ tipo: 'visitas', arquivo: 'sup.xlsx', itens: [linha('Loja J1', 'Jesus'), linha('Loja J2', 'jesús'), linha('Loja L', 'Leo')] })).dados;
+    assert.equal(r.avisos['Supervisor da planilha que não está no cadastro de supervisores'], 1); // só o "Leo"
+
+    const d = (await regis('/api/supervisores?de=2026-03&ate=2026-03')).dados;
+    const jesus = d.supervisores.find((x) => x.nome === 'Jesus Angels Zapata Rivas');
+    assert.deepEqual([jesus.promotores.map((x) => x.nome), jesus.agencias, jesus.lojas.map((x) => x.nome)], [['Carla'], ['Ag Sup'], ['Loja J1', 'Loja J2']]);
+    assert.deepEqual(d.semCadastro.map((x) => [x.nome, x.lojas.length]), [['Leo', 1]]);
+    assert.ok(d.avisos.some((a) => a.id === 'supervisor_sem_cadastro'));
+    // O filtro "Supervisor" das outras telas continua funcionando.
+    const uf = (await regis('/api/lojas-uf?de=2026-03&ate=2026-03&supervisor=Jesus')).dados.linhas;
+    assert.deepEqual(uf.map((x) => x.loja).sort(), ['Loja J1', 'Loja J2']); // "jesús" e "Jesus" são o mesmo (sem acento)
+
+    // Promotores com cargo de supervisor que já estavam no banco: a tela mostra e só move com confirmação.
+    await consulta(`INSERT INTO promotores (nome, tipo, cargo, codigo, empresa, salario) VALUES
+      ('Sup Sem Loja', 'CLT', 'Supervisor', '88', 'Empresa X', 4000), ('Sup Com Loja', 'CLT', 'Sup ll', '89', 'Empresa X', 4000)`);
+    const [comLoja] = await consulta("SELECT id FROM promotores WHERE nome = 'Sup Com Loja'");
+    const [loja] = await consulta("SELECT id FROM lojas WHERE nome = 'Loja L'");
+    await consulta("INSERT INTO visitas (promotor_id, loja_id, mes, qtd_visitas) VALUES ($1, $2, '2026-03', 1)", [comLoja.id, loja.id]);
+    assert.equal((await regis('/api/supervisores/mover')).status, 403); // só o suporte
+    const candidatos = (await suporte('/api/supervisores/mover')).dados;
+    assert.deepEqual(candidatos.map((c) => [c.nome, c.atendimentos]), [['Sup Com Loja', 1], ['Sup Sem Loja', 0]]);
+    const movido = (await suporte('/api/supervisores/mover', { method: 'POST', json: { ids: candidatos.map((c) => c.id) } })).dados;
+    assert.deepEqual(movido.movidos, ['Sup Sem Loja']);
+    assert.match(movido.naoMovidos[0].motivo, /1 atendimento/);
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM promotores WHERE nome = 'Sup Sem Loja'"))[0].n, 0);
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM supervisores WHERE nome = 'Sup Sem Loja' AND codigo = '88'"))[0].n, 1);
+    assert.equal((await suporte('/api/supervisores/mover', { method: 'POST', json: { ids: [] } })).status, 400);
+  });
+
+  await t.test('promotor sem código: nome completo + agência; primeiro nome só se único; senão pendente e ligação à mão', async () => {
+    for (const nome of ['Ana Paula', 'Ana Clara', 'Bruno Dias']) {
+      await regis('/api/promotores', { method: 'POST', json: { nome, tipo: 'AGENCIA', agencia: 'Agência Q' } });
+    }
+    const ids = Object.fromEntries((await consulta("SELECT id, nome FROM promotores WHERE agencia = 'Agência Q'")).map((x) => [x.nome, x.id]));
+    const arquivo = {
+      tipo: 'visitas', arquivo: 'q.xlsx',
+      itens: [['Bruno', 'Loja Q1'], ['Ana', 'Loja Q2'], ['Ana Paula', 'Loja Q3']].map(([nome, loja]) => ({
+        promotor: { nome, tipo: 'AGENCIA', agencia: 'Agência Q' }, loja: { nome: loja, cnpj: '', cidade: 'Q' }, mes: '2026-02', visitas: 1, custo: 10,
+      })),
+    };
+    const r = (await regis('/api/importar/gravar', { method: 'POST', json: arquivo })).dados;
+    assert.equal(r.promotoresNovos, 1); // só o "Ana" (duas Anas na agência: não adivinha)
+    assert.equal(r.avisos['Promotor não identificado (ligue à mão na tela Promotores)'], 1);
+    const lojasDe = async (id) => (await consulta("SELECT l.nome FROM visitas v JOIN lojas l ON l.id = v.loja_id WHERE v.promotor_id = $1 AND v.mes = '2026-02' ORDER BY 1", [id])).map((x) => x.nome);
+    assert.deepEqual(await lojasDe(ids['Bruno Dias']), ['Loja Q1']); // primeiro nome único na agência
+    assert.deepEqual(await lojasDe(ids['Ana Paula']), ['Loja Q3']); // nome completo
+
+    const { pendentes } = (await regis('/api/promotores/nao-identificados')).dados;
+    const ana = pendentes.find((x) => x.nome === 'Ana');
+    assert.deepEqual([ana.pendente, ana.lojas, ana.candidatos.sort()], ['ambiguo', 1, [ids['Ana Paula'], ids['Ana Clara']].sort()]);
+    const avisos = (await regis('/api/resumo?de=2026-02&ate=2026-02')).dados.avisos;
+    assert.match(avisos.find((a) => a.id === 'promotores_nao_identificados').itens[0], /Agência Q — Ana \(mais de um parecido no cadastro\)/);
+
+    assert.equal((await regis(`/api/promotores/${ana.id}/ligar`, { method: 'POST', json: { destinoId: ana.id } })).status, 400);
+    const ligado = (await regis(`/api/promotores/${ana.id}/ligar`, { method: 'POST', json: { destinoId: ids['Ana Clara'] } })).dados;
+    assert.deepEqual([ligado.atendimentos, ligado.promotor], [1, 'Ana Clara']);
+    assert.deepEqual(await lojasDe(ids['Ana Clara']), ['Loja Q2']);
+    // Reimportar o mesmo arquivo: a ligação guardada resolve o "Ana" sozinho.
+    const r2 = (await regis('/api/importar/gravar', { method: 'POST', json: arquivo })).dados;
+    assert.equal(r2.promotoresNovos, 0);
+    assert.equal(r2.avisos['Promotor não identificado (ligue à mão na tela Promotores)'], undefined);
+    assert.deepEqual(await lojasDe(ids['Ana Clara']), ['Loja Q2']);
+    assert.equal((await regis('/api/promotores/nao-identificados')).dados.pendentes.filter((x) => x.agencia === 'Agência Q').length, 0);
+  });
+
+  await t.test('MEIs sem agência: o arquivo de um não apaga o mês do outro', async () => {
+    const mei = (nome, loja) => ({ tipo: 'visitas', arquivo: `${nome}.xlsx`, itens: [{ promotor: { nome, tipo: 'MEI', agencia: '' }, loja: { nome: loja, cnpj: '', cidade: 'M' }, mes: '2026-01', visitas: 1, custo: 20 }] });
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    const lojasDeJaneiro = async () => (await regis('/api/lojas-uf?de=2026-01&ate=2026-01')).dados.linhas.map((l) => l.loja).sort();
+    await gravar(mei('Mei Um', 'Loja X'));
+    await gravar(mei('Mei Dois', 'Loja Y'));
+    const previa = (await regis('/api/importar/previa', { method: 'POST', json: mei('Mei Um', 'Loja Z') })).dados;
+    assert.match(previa.mensagem, /\(1 registros atuais/); // só o do próprio Mei Um
+    await gravar(mei('Mei Um', 'Loja Z'));
+    assert.deepEqual(await lojasDeJaneiro(), ['Loja Y', 'Loja Z']);
+  });
+
+  await t.test('importação antiga sem cópia: só apaga se digitar APAGAR', async () => {
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'faturamento', arquivo: 'antiga.xls', itens: [{ loja: { cnpj: '55555666000106', nome: 'Antiga', cidade: 'A' }, mes: '2025-12', empresa: '', valor: 10 }] } });
+    const [imp] = await consulta("UPDATE importacoes SET restauravel = FALSE WHERE arquivo = 'antiga.xls' RETURNING id");
+    const item = (await regis('/api/importacoes')).dados.find((i) => i.id === imp.id);
+    assert.deepEqual([item.restauravel, item.podeDesfazer], [false, true]);
+    const sem = await regis(`/api/importacoes/${imp.id}`, { method: 'DELETE' });
+    assert.equal(sem.status, 400);
+    assert.match(sem.dados.erro, /digite APAGAR/);
+    assert.equal((await regis(`/api/importacoes/${imp.id}?confirmacao=apagar`, { method: 'DELETE' })).status, 400); // tem que ser exatamente APAGAR
+    const ok = (await regis(`/api/importacoes/${imp.id}?confirmacao=APAGAR`, { method: 'DELETE' })).dados;
+    assert.deepEqual([ok.registros, ok.restaurados, ok.semCopia], [1, 0, true]);
   });
 
   await t.test('endereço ou corpo inválido responde 400, sem revelar detalhes do banco', async () => {

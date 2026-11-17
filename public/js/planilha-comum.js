@@ -312,6 +312,20 @@
     return { nome: m[1].trim(), cargo: m[2].trim() };
   }
 
+  // Acha uma pessoa pelo nome, sem acento e sem diferenciar maiúsculas:
+  //   1º) nome completo igual;  2º) mesmo primeiro nome, mas SÓ se houver uma pessoa só com ele.
+  // Com duas ou mais "Maria", não adivinha: devolve null. (Ex.: "Jesus" na planilha acha "JESUS ANGELS ZAPATA RIVAS".)
+  function acharPorNome(nome, lista) {
+    const alvo = normalizar(nome);
+    if (!alvo) return null;
+    const iguais = lista.filter((p) => normalizar(p.nome) === alvo);
+    if (iguais.length === 1) return iguais[0];
+    if (iguais.length > 1) return null;
+    const primeiro = primeiroNome(nome);
+    const mesmoPrimeiro = lista.filter((p) => primeiroNome(p.nome) === primeiro);
+    return mesmoPrimeiro.length === 1 ? mesmoPrimeiro[0] : null;
+  }
+
   // Supervisor ("Sup.", "Sup ll", "supervisor", "Supervisora"...): não entra no custo dos promotores.
   const ehSupervisor = (cargo) => /^sup( |$)|^supervis/.test(normalizar(cargo));
 
@@ -474,5 +488,5 @@
     };
   }
 
-  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, separarCargo, ehSupervisor, codigoNormal, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
+  return { CAMPOS, TIPOS_VALIDOS, ufDe, chaveDaLoja, separarCargo, ehSupervisor, codigoNormal, acharPorNome, CAMPOS_DINHEIRO, primeiroNome, normalizar, sugerirMapa, analisar, textoDe, numeroDe, cnpjDe, cnpjValido, dataDe, mesDe, mesValido, textoDoHtml, criarLeitor, lerTexto, criarAgrupador };
 });

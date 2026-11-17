@@ -240,6 +240,7 @@ async function confirmar() {
     if (r.clientesNovos) partes.push(`${r.clientesNovos} CNPJ(s) novo(s) no faturamento do ERP.`);
     if (r.promotoresNovos) partes.push(`${r.promotoresNovos} promotor(es) novo(s) cadastrado(s).`);
     if (r.promotoresAtualizados) partes.push(`${r.promotoresAtualizados} promotor(es) atualizado(s).`);
+    if (r.supervisoresNovos || r.supervisoresAtualizados) partes.push(`${(r.supervisoresNovos || 0) + (r.supervisoresAtualizados || 0)} supervisor(es) foram para o cadastro de supervisores.`);
     if (r.ignoradas) partes.push(`${r.ignoradas} linha(s) ignorada(s): ${lista(r.motivos)}.`);
     if (Object.keys(r.avisos || {}).length) partes.push(`Para conferir: ${lista(r.avisos)}.`);
     mostrarAviso(aviso, partes.join(' '), 'ok');
@@ -277,7 +278,8 @@ async function carregarListas() {
       <td>${esc(resumoDosMeses(h.meses))}</td>
       <td class="num">${h.linhas}</td><td class="num">${h.ignoradas}</td><td class="num">${reais(h.total)}</td>
       <td>${h.podeDesfazer
-        ? `<button type="button" class="perigo pequeno" data-desfazer="${h.id}" data-nome="${esc(h.arquivo)}" data-sem-copia="${h.restauravel ? '' : 'sim'}">Desfazer</button>`
+        ? `<button type="button" class="perigo pequeno" data-desfazer="${h.id}" data-nome="${esc(h.arquivo)}" data-sem-copia="${h.restauravel ? '' : 'sim'}"
+            title="${h.restauravel ? 'Apaga esta importação e devolve o que existia antes dela' : 'Importação sem cópia: só apaga, o dado anterior não volta'}">${h.restauravel ? 'Desfazer' : 'Apagar (sem cópia)'}</button>`
         : `<span class="menor" title="${esc(h.motivoNaoDesfaz)}">${h.tipo === 'promotores' ? 'não se desfaz' : 'há uma mais nova'}</span>`}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="vazio">Nenhuma importação ainda.</td></tr>';
 }
@@ -286,12 +288,16 @@ async function carregarListas() {
 async function desfazer(evento) {
   const botao = evento.target.closest('button[data-desfazer]');
   if (!botao) return;
-  const pergunta = botao.dataset.semCopia
-    ? `Desfazer a importação de "${botao.dataset.nome}"? Ela é de antes da cópia de segurança: os dados dela serão apagados, mas o que ela substituiu NÃO volta.`
-    : `Desfazer a importação de "${botao.dataset.nome}"? Os dados dela serão apagados e os que existiam antes dela voltam.`;
-  if (!confirm(pergunta)) return;
+  let confirmacao = '';
+  if (botao.dataset.semCopia) {
+    // Importação antiga, sem cópia: o dado anterior NÃO volta. Só apaga se a pessoa digitar APAGAR.
+    const digitado = prompt(`A importação "${botao.dataset.nome}" é de antes da cópia de segurança.\n\nDesfazer vai só APAGAR os dados dela. O que ela substituiu NÃO volta.\n\nPara apagar mesmo assim, digite APAGAR:`);
+    if (digitado === null) return;
+    if (digitado.trim() !== 'APAGAR') { mostrarAviso(el('aviso'), 'Nada foi apagado: era preciso digitar APAGAR.'); return; }
+    confirmacao = 'APAGAR';
+  } else if (!confirm(`Desfazer a importação de "${botao.dataset.nome}"? Os dados dela serão apagados e os que existiam antes dela voltam.`)) return;
   try {
-    const r = await api(`/api/importacoes/${botao.dataset.desfazer}`, { method: 'DELETE' });
+    const r = await api(`/api/importacoes/${botao.dataset.desfazer}?${parametros({ confirmacao })}`, { method: 'DELETE' });
     const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
     mostrarAviso(el('aviso'), `Importação desfeita: ${r.registros} registro(s) apagado(s) e ${r.restaurados} restaurado(s).`, 'ok');
     await carregarListas();

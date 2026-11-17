@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Supervisores · Controle de Promotores</title>
+  <link rel="stylesheet" href="/css/estilo.css">
+</head>
+<body>
+  <div class="estrutura">
+    <nav class="menu" id="menu" aria-label="Menu principal"></nav>
+    <main class="conteudo">
+      <div class="topo">
+        <div><h1>Supervisores</h1><p class="subtitulo">De quem cada supervisor é supervisor no período: promotores, agências e lojas em que o nome dele aparece na coluna "Supervisor" da planilha de atendimentos.</p></div>
+        <div class="acoes"><button type="button" id="novo">Novo supervisor</button></div>
+      </div>
+      <div class="painel">
+        <div class="filtros" id="filtros-comuns"></div>
+        <div class="etiquetas" id="etiquetas"></div>
+      </div>
+      <div id="avisos"></div>
+      <div id="aviso" class="aviso" hidden></div>
+      <div class="painel" id="painel-mover" hidden>
+        <h2>Supervisores que estão no cadastro de promotores</h2>
+        <p class="ajuda">Estes promotores têm cargo de supervisor. Ao mover, eles saem dos promotores (e do custo) e passam a existir só como supervisor: nome, código, cargo e empresa. Quem tem atendimento lançado como promotor não é movido.</p>
+        <div class="rolagem"><table class="compacta">
+          <thead><tr><th><span class="sr-only">Escolher</span></th><th>Nome</th><th>Cargo</th><th>Código</th><th>Empresa</th><th class="num">Custo fixo mensal</th><th class="num">Atendimentos como promotor</th></tr></thead>
+          <tbody id="candidatos"></tbody>
+        </table></div>
+        <div class="botoes"><button type="button" id="mover">Mover os marcados para Supervisores</button></div>
+      </div>
+      <div class="painel">
+        <div class="rolagem">
+          <table>
+            <thead><tr><th>Supervisor</th><th>Código</th><th>Promotores</th><th>Agências</th><th>Lojas</th><th></th></tr></thead>
+            <tbody id="linhas"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="painel" id="painel-sem-cadastro" hidden>
+        <h2>Nomes da planilha sem cadastro</h2>
+        <p class="ajuda">Estes nomes aparecem na coluna "Supervisor" da planilha de atendimentos, mas não foram encontrados no cadastro (nem pelo nome completo, nem por um primeiro nome único).</p>
+        <div class="rolagem"><table>
+          <thead><tr><th>Nome na planilha</th><th>Promotores</th><th>Agências</th><th>Lojas</th><th></th></tr></thead>
+          <tbody id="sem-cadastro"></tbody>
+        </table></div>
+      </div>
+      <dialog id="janela-supervisor">
+        <form method="dialog">
+          <h2>Novo supervisor</h2>
+          <div id="aviso-supervisor" class="aviso" hidden></div>
+          <div class="grade">
+            <div class="campo inteiro"><label for="s-nome">Nome</label><input id="s-nome" required maxlength="120"></div>
+            <div class="campo"><label for="s-codigo">Código (se tiver)</label><input id="s-codigo" maxlength="30"></div>
+            <div class="campo"><label for="s-empresa">Empresa (se quiser)</label><input id="s-empresa" maxlength="120"></div>
+          </div>
+          <p class="ajuda">Ele é ligado aos atendimentos pelo nome escrito na coluna "Supervisor" (sem acento e sem diferenciar maiúsculas; serve também o primeiro nome, se só um supervisor tiver esse primeiro nome).</p>
+          <div class="botoes"><button type="button" class="secundario" id="s-cancelar">Cancelar</button><button type="submit">Salvar</button></div>
+        </form>
+      </dialog>
+    </main>
+  </div>
+  <script src="/js/comum.js"></script>
+  <script src="/js/supervisores.js"></script>
+</body>
+</html>

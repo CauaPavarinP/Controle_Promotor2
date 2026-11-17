@@ -204,3 +204,14 @@ test('cadastro: o agrupador separa o cargo do nome', () => {
   const [item] = agrupador.resultado().itens;
   assert.deepEqual([item.nome, item.cargo, item.codigo], ['Lionis Valter Garcez', 'Sup. ll', '30001']);
 });
+
+test('acha pessoa pelo nome: completo, ou primeiro nome só se for único', () => {
+  const { acharPorNome } = require('../src/planilha');
+  const lista = [{ nome: 'JESUS ANGELS ZAPATA RIVAS' }, { nome: 'Maria Lima' }, { nome: 'Maria Souza' }, { nome: 'José Pereira' }];
+  assert.equal(acharPorNome('Jesus', lista).nome, 'JESUS ANGELS ZAPATA RIVAS');
+  assert.equal(acharPorNome('jesús angels zapata rivas', lista).nome, 'JESUS ANGELS ZAPATA RIVAS');
+  assert.equal(acharPorNome('JOSE PEREIRA', lista).nome, 'José Pereira');
+  assert.equal(acharPorNome('Maria', lista), null); // duas Marias: não adivinha
+  assert.equal(acharPorNome('John Duarte', lista), null);
+  assert.equal(acharPorNome('', lista), null);
+});

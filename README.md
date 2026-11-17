@@ -9,6 +9,7 @@ Sistema web para saber se cada promotor **"se paga"**: o custo dele precisa ser 
 | Login | `/login` | Entrada com login e senha |
 | Resumo | `/resumo` | Cards do período: faturamento total, custo total dos promotores, % do custo sobre o faturamento e promotores dentro/fora da meta |
 | Lojas por UF | `/lojas-uf` | Botões por UF e tabela das lojas atendidas (supervisor, agência, promotor, CNPJ, loja, cidade, UF, visitas, valor de cada mês, total, custo, faturamento, % e situação). Ordena por coluna, oculta agências sem custo, exporta Excel e imprime |
+| Supervisores | `/supervisores` | Cadastro de supervisores (nome e código) e de quem cada um é supervisor no período: promotores, agências e lojas. Lista os nomes da planilha sem cadastro (com botão Cadastrar). O suporte vê os promotores com cargo de supervisor e pode movê-los para cá |
 | Agências | `/agencias` | Se cada agência vale o que custa: cartões (faturamento, custo, % contra o limite) e tabela por agência que abre os promotores e, no promotor, as lojas. Exporta Excel (3 abas) |
 | Faturamento | `/faturamento` | Faturamento de cada loja com filtros (período, busca, empresa, situação), custo dos promotores na loja e exportação para Excel |
 | Ficha da loja | `/loja?id=...` ou `/loja?cnpj=...` | Abre ao clicar numa linha do Faturamento. Loja atendida: faturamento do CNPJ e a parte da loja mês a mês, outras lojas do mesmo CNPJ, custo, % e promotores. Cliente do ERP sem atendimento: o faturamento do CNPJ mês a mês |
@@ -55,13 +56,15 @@ Pode haver diferença de centavos entre um total e a soma das linhas, por arredo
 - A exceção é o **.xlsx**, que o navegador não sabe abrir: ele vai para o servidor converter, com limite de 25 MB. Se passar disso, salve como .csv.
 - O .xls binário do Excel antigo não é aceito (salve como .xlsx ou .csv).
 - **Cargo no nome:** no cadastro, "NOME - Sup ll" vira nome "NOME" e cargo "Sup ll" (coluna `cargo`). Só separa quando o fim parece um cargo (curto, sem números nem parênteses), para não cortar nomes de agência como "101 do Brasil - Filial PR (CLT)". Os nomes que já estavam no banco são limpos ao iniciar.
-- **Supervisor** (cargo "Sup.", "Sup ll", "supervisor"...) não entra no custo dos promotores nem no aviso "Promotores sem loja lançada". "Lider", "INSS" e "Lic. Maternidade" ficam como cargo, mas contam no custo.
+- **Supervisor não é promotor.** No cadastro, quem tem cargo de supervisor ("Sup", "Sup.", "Sup l", "Sup ll", "Supervisor"...) vai para o cadastro de **supervisores** (nome, código, cargo e empresa), sem salário, custo, tipo ou situação, e não aparece em Promotores nem nos totais. "Lider", "INSS" e "Lic. Maternidade" continuam promotores, com o cargo anotado.
+- **Supervisores que já estavam em promotores** (importados antes desta regra): a tela Supervisores mostra a lista ao suporte, que marca e confirma a mudança. Quem tem atendimento lançado como promotor não é movido.
+- **Supervisor nos atendimentos:** é ligado pela coluna "Supervisor" da planilha, comparando sem acento e sem diferenciar maiúsculas: primeiro o nome completo; se não achar, o primeiro nome, **só se houver um único supervisor com ele** (a planilha costuma trazer só "Jesus"). Nome que não acha ninguém aparece no aviso "Supervisor sem cadastro" e na tela Supervisores. O filtro "Supervisor" das telas usa o nome escrito na planilha.
 - No relatório de faturamento do Focco, as colunas usadas são `CNPJ CPF`, `CLIENTE`, `DT EMIS`, `VLR TOTAL`, `COD EMP`, `CIDADE` e `UF`. Cada linha é um item de nota; o sistema soma tudo por cliente e mês.
 - O sistema reconhece as colunas pelo nome do cabeçalho e mostra para conferir. Dá para corrigir na tela.
 - Em planilhas com várias abas, ele escolhe sozinho a aba com mais colunas reconhecidas para o tipo escolhido.
 - **Importar substitui o mês inteiro** (não soma, e o que saiu do arquivo some):
   - **Faturamento:** antes de gravar, apaga todo o faturamento dos **meses e empresas** que o arquivo traz. Por isso, exporte do Focco sempre o **mês inteiro** de cada empresa.
-  - **Atendimentos:** apaga todos os atendimentos dos **meses** do arquivo feitos pelas **agências** do arquivo (e pelos promotores dele), inclusive os lançados à mão na tela. É por agência, e não o mês de todo mundo, porque cada agência manda o próprio arquivo: importar o arquivo da agência A não apaga o que veio da agência B. A agência é a do texto do arquivo (coluna "Agência ou MEI"); um CLT achado pelo código entra só ele, sem levar junto a agência que tem no cadastro.
+  - **Atendimentos:** apaga todos os atendimentos dos **meses** do arquivo feitos pelas **agências** do arquivo (e pelos promotores dele), inclusive os lançados à mão na tela. É por agência, e não o mês de todo mundo, porque cada agência manda o próprio arquivo: importar o arquivo da agência A não apaga o que veio da agência B. A agência é a do texto do arquivo (coluna "Agência ou MEI"); um CLT achado pelo código entra só ele, sem levar junto a agência que tem no cadastro. **Linha sem agência** (ex.: MEI) apaga só os atendimentos dos promotores daquele arquivo, nunca o grupo "Sem agência" inteiro.
   - **Cadastro de promotores:** atualiza quem já existe e cria quem não existe. Ninguém é apagado.
 - **Antes de gravar**, a tela mostra o que vai ser substituído, por exemplo: "Isto vai substituir todo o mês out/2026 da empresa 60 (1.533 registros atuais)". Só grava se a pessoa confirmar.
 - Linhas de total ou em branco são ignoradas e aparecem contadas no aviso final, junto com o que precisa ser conferido.
@@ -80,7 +83,13 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 
 - **Loja:** pelo **CNPJ**. É ele que liga a planilha de atendimentos ao faturamento do Focco. Loja sem CNPJ é identificada pelo nome + cidade e **não liga com o faturamento** (fica como *Sem faturamento*).
 - **CNPJ errado** (dígito verificador não confere, ou não tem 14 dígitos): a loja entra **sem CNPJ** e a importação avisa quantas são.
-- **Promotor:** pelo **código + primeiro nome** (a planilha de atendimentos traz só o primeiro nome; o cadastro, o nome completo). O código é comparado sem zeros à esquerda: "06" e "6" são o mesmo. Sem código, pelo **nome + agência**: dois "João" de agências diferentes são pessoas diferentes.
+- **Promotor**, na importação de atendimentos (nem todo CLT, MEI ou promotor de agência tem código), nesta ordem:
+  1. **com código:** código + primeiro nome (o código é comparado sem zeros à esquerda: "06" e "6" são o mesmo);
+  2. **ligação feita à mão** na tela Promotores (nome da planilha + agência), guardada para as próximas importações;
+  3. **nome completo + agência**, sem acento e sem diferenciar maiúsculas;
+  4. **primeiro nome + agência ou empresa**, mas **só se houver um único** promotor que bata.
+  - Com mais de um parecido, o sistema **não adivinha**: o promotor fica **pendente** ("Promotores não identificados"). CLT que não está no cadastro também fica pendente. Promotor de agência, MEI ou freelancer que ainda não existe é cadastrado como novo.
+  - Na tela **Promotores**, o quadro "Promotores não identificados" permite escolher o promotor certo e clicar em **Ligar**: os atendimentos passam para ele, o pendente é apagado e a ligação fica guardada.
 - **Código sem cadastro:** quando um atendimento traz código de promotor e ninguém do cadastro tem esse código + primeiro nome, a importação avisa e as telas mostram o aviso "Código de promotor sem cadastro" com a lista. Sem cadastro não há salário, então o custo de CLT fica "não informado".
 - **Linha sem nome de promotor:** o "promotor" passa a ser a própria agência da linha.
 - **Texto no lugar de valor no cadastro** (ex.: "carro", "600 + 120m"): o sistema usa o primeiro número que aparecer (ou zero) e guarda o texto original na observação do promotor, para conferir.
@@ -91,10 +100,12 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 |--------|--------------|
 | `faturamento_erp` | Faturamento do ERP por CNPJ + mês + empresa |
 | `importacoes_backup` | Cópia das linhas que cada importação substituiu (para o Desfazer restaurar) |
+| `supervisores` | Supervisores: nome, código, cargo e empresa. `chave` = nome sem acento e minúsculo |
+| `vinculos_promotor` | Ligações feitas à mão: nome do promotor na planilha + agência → promotor do cadastro |
 | `clientes_erp` | Nome, cidade e UF de cada CNPJ do ERP |
 | `lojas` | Lojas atendidas. Identificadas pela `chave` (CNPJ + nome + cidade): lojas da mesma rede podem ter o mesmo CNPJ |
 | `visitas` | Atendimentos: promotor + loja + mês, visitas, valor, dias, status, supervisor |
-| `promotores` | Cadastro. `cargo` separado do nome; `cadastrado` = veio do cadastro (planilha ou tela), e não só dos atendimentos |
+| `promotores` | Cadastro. `cargo` separado do nome; `cadastrado` = veio do cadastro (planilha ou tela), e não só dos atendimentos; `pendente` = não identificado com certeza (`ambiguo` ou `nao_encontrado`) |
 | `importacoes`, `usuarios` | Histórico de importações (`restauravel` = guardou cópia) e usuários |
 
 **Migração automática:** nas versões anteriores o faturamento ficava por loja (tabela `faturamento`). Ao iniciar, o sistema converte esses dados para `faturamento_erp` uma única vez, numa transação (se algo falhar, nada muda), e guarda uma cópia do formato antigo em `backup_faturamento_por_loja`. Lojas que só existiam por causa do faturamento (sem nenhum atendimento) viram clientes do ERP. Depois de conferir que está tudo certo, a tabela de cópia pode ser apagada.
@@ -119,7 +130,7 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **Importar → Desfazer** apaga o que a importação gravou e **restaura o que ela tinha substituído**, numa transação só. Antes de substituir um mês, a importação guarda uma cópia das linhas antigas na tabela `importacoes_backup` (`importacao_id`, `tabela`, `dados` em JSON).
 - Só a **importação mais recente de cada mês e tipo** pode ser desfeita (as outras mostram "há uma mais nova"). Para voltar mais, desfaça uma por vez, da mais nova para a mais antiga.
 - A importação do **cadastro de promotores não pode ser desfeita** (o botão não aparece). Corrija o promotor na tela ou importe o cadastro de novo.
-- Importações feitas **antes desta versão** não guardaram cópia: o Desfazer delas só apaga, e avisa que o anterior não volta.
+- Importações feitas **antes da cópia de segurança** (`restauravel = false`) mostram o botão **"Apagar (sem cópia)"**: ele só apaga, o dado anterior não volta, e só funciona se a pessoa digitar **APAGAR**.
 - Lojas, clientes do ERP e promotores cadastrados por uma importação continuam no sistema depois do Desfazer.
 - **Ficha do promotor → Excluir promotor:** apaga o promotor e todos os atendimentos dele.
 - O "Total" de cada linha em *Últimas importações* é o valor daquele arquivo, não o total que está no sistema.
@@ -141,6 +152,8 @@ Cada item do menu é uma página separada. Para a página nova não nascer vazia
 | `public/js/planilha-comum.js` | Lê o arquivo aos poucos, reconhece as colunas e soma as linhas. Roda no navegador **e** no servidor |
 | `src/planilha.js` | Converte .xlsx em linhas e monta os arquivos de exportação |
 | `src/importar.js` | Confere os dados recebidos e grava faturamento e visitas |
+| `src/supervisores.js` | Supervisores (cadastro, mover dos promotores) e promotores não identificados (ligar à mão) |
+| `scripts/backup.js`, `scripts/restaurar.js` | `npm run backup` e `npm run restaurar` (pg_dump / pg_restore) |
 | `src/app.js` | Rotas da API |
 | `public/` | Telas (um `.html` e um `.js` por tela; `comum.js` é compartilhado) |
 
@@ -177,6 +190,36 @@ Os testes das contas e da leitura de planilhas não precisam de banco. O teste d
 ```bash
 DATABASE_URL_TESTE=postgres://usuario:senha@localhost:5432/promotor_teste npm test
 ```
+
+## Backup e restauração
+
+Precisa das ferramentas do PostgreSQL (`pg_dump` e `pg_restore`) na mesma versão do banco ou mais nova (o banco do Render é PostgreSQL 16). No Windows, vêm no instalador do PostgreSQL (marque "Command Line Tools"); no Linux, `sudo apt install postgresql-client`. Os dois comandos usam o `DATABASE_URL` do `.env`.
+
+Fazer o backup (cria `backups/promotor-AAAA-MM-DD_HHMM.dump`; a pasta `backups/` não vai para o Git):
+
+```bash
+npm run backup
+```
+
+Restaurar um backup no banco do `DATABASE_URL` (**substitui** os dados atuais desse banco; pede para digitar RESTAURAR e roda numa transação só, então se falhar o banco fica como estava):
+
+```bash
+npm run restaurar -- backups/promotor-2026-11-17_1030.dump
+```
+
+O banco do Render só aceita conexões de fora pelos IPs liberados no painel dele (hoje, o da empresa). Rode os comandos de um computador da empresa, ou libere o IP em *Database → Networking*. O arquivo de backup tem dados da empresa: guarde em local seguro.
+
+### Migrar para outro banco PostgreSQL
+
+O sistema não depende do Render: qualquer PostgreSQL serve, só trocando o `DATABASE_URL`.
+
+1. Faça o backup do banco atual: `npm run backup`.
+2. Crie o banco novo no outro serviço e copie o endereço de conexão dele.
+3. No `.env`, troque o `DATABASE_URL` pelo endereço do banco novo e restaure: `npm run restaurar -- backups/<arquivo>.dump`.
+4. No Render (ou onde o sistema estiver publicado), troque a variável `DATABASE_URL` do serviço pelo endereço do banco novo. O sistema reinicia sozinho.
+5. Confira as telas. Só apague o banco antigo depois de conferir.
+
+Se preferir começar o banco novo vazio, pule os passos 1 e 3: ao iniciar, o sistema cria as tabelas sozinho.
 
 ## Publicar no Render
 
