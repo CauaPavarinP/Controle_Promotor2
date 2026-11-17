@@ -38,7 +38,8 @@ function desenharCards() {
     <div class="card"><div class="rotulo">Promotores sem supervisor</div><div class="valor">${dados.semSupervisor.length.toLocaleString('pt-BR')}</div>
       <div class="detalhe"><a href="#painel-sem-supervisor">Ver a lista</a></div></div>
     <div class="card ${pendentes ? 'atencao' : ''}"><div class="rotulo">Cadastros com pendência</div><div class="valor">${pendentes.toLocaleString('pt-BR')}</div>
-      <div class="detalhe">Sem código ou nome genérico</div></div>`;
+      <div class="detalhe">Sem código ou nome genérico ·
+        <button type="button" class="link" id="ver-pendencias">${filtroTela.soPendencias ? 'mostrar todos' : 'ver só esses'}</button></div></div>`;
 }
 
 // Botão com a quantidade. Ao clicar, abre a lista na linha de baixo, na largura da tabela.
@@ -58,14 +59,51 @@ function linhaDetalhe(s) {
 }
 const promotorHtml = (p) => `<a href="/promotor?id=${p.id}">${esc(p.nome)}</a> <span class="menor-inline">${esc(p.agencia)} · ${p.lojas} loja(s)</span>`;
 
+// Filtros desta tela (só no navegador): busca por nome ou código, agência e "só pendências".
+const filtroTela = { busca: '', agencia: '', soPendencias: false };
+
+function passaNoFiltro(s) {
+  const busca = comparavel(filtroTela.busca);
+  if (busca && !comparavel(`${s.nome} ${s.codigo || ''}`).includes(busca)) return false;
+  if (filtroTela.agencia && !s.agencias.includes(filtroTela.agencia)) return false;
+  if (filtroTela.soPendencias && !pendenciasDe(s).length) return false;
+  return true;
+}
+
+// Agências que aparecem na tela (dos supervisores e dos promotores sem supervisor).
+function montarSeletorAgencia() {
+  const agencias = [...new Set([...dados.supervisores.flatMap((s) => s.agencias), ...dados.semSupervisor.map((p) => p.agencia)])]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  if (filtroTela.agencia && !agencias.includes(filtroTela.agencia)) filtroTela.agencia = '';
+  el('f-agencia-tela').innerHTML = `<option value="">Todas</option>${agencias.map((a) => `<option>${esc(a)}</option>`).join('')}`;
+  el('f-agencia-tela').value = filtroTela.agencia;
+}
+
+function desenhar() {
+  desenharCards();
+  desenharTabela();
+  desenharSemSupervisor();
+}
+
 async function carregar() {
   const aviso = el('aviso');
   try {
     dados = await api(`/api/supervisores?${parametros(filtrosAtuais())}`);
     mostrarAviso(aviso, '');
     mostrarAvisos(dados.avisos);
-    desenharCards();
-    el('linhas').innerHTML = dados.supervisores.map((s) => `
+    montarSeletorAgencia();
+    desenhar();
+  } catch (erro) {
+    mostrarAviso(aviso, erro.message);
+  }
+}
+
+function desenharTabela() {
+  const visiveis = dados.supervisores.filter(passaNoFiltro);
+  el('contagem-sup').textContent = visiveis.length === dados.supervisores.length
+    ? plural(visiveis.length, 'supervisor', 'supervisores')
+    : `Mostrando ${visiveis.length} de ${plural(dados.supervisores.length, 'supervisor', 'supervisores')}`;
+  el('linhas').innerHTML = visiveis.map((s) => `
       <tr class="${abertos.has(s.id) ? 'aberto' : ''}" data-linha="${s.id}">
         <td><strong>${esc(s.nome)}</strong><span class="menor">${esc([s.cargo, s.empresa].filter(Boolean).join(' · '))}</span></td>
         <td>${esc(s.codigo || '—')}</td>
@@ -77,12 +115,14 @@ async function carregar() {
           <button type="button" class="secundario pequeno" data-juntar="${s.id}">Juntar</button>
           <button type="button" class="perigo pequeno" data-excluir="${s.id}">Excluir</button>
         </td>
-      </tr>${s.promotores.length ? linhaDetalhe(s) : ''}`).join('') || '<tr><td colspan="6" class="vazio">Nenhum supervisor com promotor nestes filtros.</td></tr>';
-    el('painel-sem-supervisor').hidden = !dados.semSupervisor.length;
-    el('sem-supervisor').innerHTML = dados.semSupervisor.map((p) => `<li>${promotorHtml(p)}</li>`).join('');
-  } catch (erro) {
-    mostrarAviso(aviso, erro.message);
-  }
+      </tr>${s.promotores.length ? linhaDetalhe(s) : ''}`).join('')
+    || `<tr><td colspan="6" class="vazio">${dados.supervisores.length ? 'Nenhum supervisor com essa busca ou filtro.' : 'Nenhum supervisor com promotor nestes filtros.'}</td></tr>`;
+}
+
+function desenharSemSupervisor() {
+  const lista = dados.semSupervisor.filter((p) => !filtroTela.agencia || p.agencia === filtroTela.agencia);
+  el('painel-sem-supervisor').hidden = !dados.semSupervisor.length;
+  el('sem-supervisor').innerHTML = lista.map((p) => `<li>${promotorHtml(p)}</li>`).join('') || '<li class="vazio">Nenhum nesta agência.</li>';
 }
 
 const supervisor = (id) => dados.supervisores.find((s) => s.id === Number(id));
@@ -104,6 +144,16 @@ function abrirFormulario(s) {
   carregar();
 
   el('novo').addEventListener('click', () => abrirFormulario(null));
+  // Filtros desta tela: redesenham sem ir ao servidor.
+  el('f-busca-sup').addEventListener('input', comAtraso(() => { filtroTela.busca = el('f-busca-sup').value; desenharTabela(); }, 150));
+  el('f-agencia-tela').addEventListener('change', () => { filtroTela.agencia = el('f-agencia-tela').value; desenhar(); });
+  el('f-pendencias').addEventListener('change', () => { filtroTela.soPendencias = el('f-pendencias').checked; desenhar(); });
+  el('cards-sup').addEventListener('click', (evento) => {
+    if (!evento.target.closest('#ver-pendencias')) return;
+    filtroTela.soPendencias = !filtroTela.soPendencias;
+    el('f-pendencias').checked = filtroTela.soPendencias;
+    desenhar();
+  });
   el('s-cancelar').addEventListener('click', () => el('janela-supervisor').close());
   el('janela-supervisor').querySelector('form').addEventListener('submit', async (evento) => {
     evento.preventDefault();

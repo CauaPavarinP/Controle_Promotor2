@@ -22,6 +22,12 @@
       <div id="aviso" class="aviso" hidden></div>
       <div class="cards" id="cards-sup" aria-live="polite"></div>
       <div class="painel">
+        <div class="barra-tabela">
+          <div class="campo largo"><label for="f-busca-sup">Buscar supervisor</label><input id="f-busca-sup" type="search" placeholder="Nome ou código" autocomplete="off"></div>
+          <div class="campo"><label for="f-agencia-tela">Agência / filial</label><select id="f-agencia-tela"></select></div>
+          <label class="caixa"><input type="checkbox" id="f-pendencias"> Só pendências</label>
+          <span class="contagem" id="contagem-sup" aria-live="polite"></span>
+        </div>
         <div class="rolagem">
           <table>
             <thead><tr><th>Supervisor</th><th>Código</th><th>Promotores</th><th>Agências</th><th class="num">Lojas</th><th></th></tr></thead>
