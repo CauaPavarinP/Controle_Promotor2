@@ -18,20 +18,40 @@
         <div class="filtros" id="filtros-comuns"></div>
         <div class="etiquetas" id="etiquetas"></div>
       </div>
-      <div id="avisos"></div>
+      <div class="cards" id="cards-sup" aria-live="polite"></div>
       <div id="aviso" class="aviso" hidden></div>
+      <div id="avisos"></div>
       <div class="painel">
-        <div class="rolagem">
-          <table>
-            <thead><tr><th>Supervisor</th><th>Código</th><th>Promotores</th><th>Agências</th><th class="num">Lojas</th><th></th></tr></thead>
-            <tbody id="linhas"></tbody>
-          </table>
+        <div class="barra-tabela">
+          <div class="campo largo"><label for="f-busca-sup">Buscar supervisor</label><input id="f-busca-sup" type="search" placeholder="Nome ou código" autocomplete="off"></div>
+          <div class="campo"><label for="f-agencia-tela">Agência / filial</label><select id="f-agencia-tela"></select></div>
+          <label class="caixa"><input type="checkbox" id="f-pendencias"> Só pendências</label>
+          <span class="contagem" id="contagem-sup" aria-live="polite"></span>
         </div>
+        <table class="tabela-sup">
+          <thead id="cabecalho-sup"><tr>
+            <th data-ordem="nome">Supervisor</th>
+            <th data-ordem="codigo">Código</th>
+            <th class="num" data-ordem="promotores" title="Promotores diferentes com pelo menos um atendimento ligado a este supervisor no período. Um promotor pode estar em mais de um supervisor, por isso a soma desta coluna pode passar do total de promotores.">Promotores <span class="info" aria-hidden="true">ⓘ</span></th>
+            <th class="num" data-ordem="agencias" title="Agências diferentes desses atendimentos">Agências</th>
+            <th class="num" data-ordem="lojas" title="Lojas diferentes desses atendimentos">Lojas</th>
+            <th><span class="sr-only">Ações</span></th>
+          </tr></thead>
+          <tbody id="linhas"></tbody>
+        </table>
       </div>
       <div class="painel" id="painel-sem-supervisor" hidden>
         <h2>Promotores sem supervisor no período</h2>
         <p class="ajuda">Nenhum atendimento destes promotores no período tem supervisor na planilha. É comum em agência terceirizada.</p>
-        <ul class="grade-nomes" id="sem-supervisor"></ul>
+        <div class="barra-tabela">
+          <div class="campo largo"><label for="f-busca-sem">Buscar promotor</label><input id="f-busca-sem" type="search" placeholder="Nome ou agência" autocomplete="off"></div>
+          <button type="button" class="secundario pequeno" id="alternar-grupos">Recolher todos</button>
+          <span class="contagem" id="contagem-sem" aria-live="polite"></span>
+        </div>
+        <table class="tabela-sem">
+          <thead><tr><th>Promotor</th><th>Tipo</th><th class="num">Lojas no período</th></tr></thead>
+          <tbody id="sem-supervisor"></tbody>
+        </table>
       </div>
       <dialog id="janela-supervisor">
         <form method="dialog">
@@ -52,6 +72,16 @@
           <p>Use quando dois nomes são a mesma pessoa (ex.: "Leo" e "Leonardo Silva"). Os atendimentos de <strong id="juntar-origem"></strong> passam para o supervisor escolhido, e <span id="juntar-origem-2"></span> é apagado.</p>
           <div class="campo"><label for="juntar-destino">Juntar com</label><select id="juntar-destino" required></select></div>
           <div class="botoes"><button type="button" class="secundario" id="juntar-cancelar">Cancelar</button><button type="submit">Juntar</button></div>
+        </form>
+      </dialog>
+      <dialog id="janela-excluir">
+        <form method="dialog">
+          <h2>Excluir supervisor</h2>
+          <div id="aviso-excluir" class="aviso" hidden></div>
+          <p>Excluir o supervisor <strong id="excluir-nome"></strong>?</p>
+          <p class="ajuda" id="excluir-detalhe"></p>
+          <p class="ajuda">Se for a mesma pessoa que outro supervisor, use <strong>Juntar</strong> em vez de excluir. A exclusão não tem como desfazer.</p>
+          <div class="botoes"><button type="button" class="secundario" id="excluir-cancelar">Cancelar</button><button type="submit" class="perigo">Excluir</button></div>
         </form>
       </dialog>
     </main>

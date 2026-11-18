@@ -1,6 +1,9 @@
 // Rotas do sistema: páginas (pasta public) e API (tudo que começa com /api).
+const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
+const compression = require('compression');
 const cookieSession = require('cookie-session');
 const config = require('./config');
 const { consulta } = require('./db');
@@ -18,12 +21,41 @@ const ROTULO_SITUACAO = {
   falta_faturamento: 'Falta o faturamento', sem_cnpj: 'Sem CNPJ',
   vale: 'Vale a pena', nao_vale: 'Não vale a pena',
 };
+// ---------- Velocidade: arquivos com versão no endereço ----------
+// Cada tela é enviada com "?v=<resumo do conteúdo>" no endereço do CSS e do JS (ex.: /js/comum.js?v=3f2a9c1b).
+// Com a versão, o navegador guarda o arquivo por até 1 ano e não pergunta de novo ao servidor a cada tela.
+// Quando o arquivo muda (nova publicação), o resumo muda, o endereço muda e o navegador baixa o novo.
+const PASTA_PUBLICA = path.join(__dirname, '..', 'public');
+const versoes = new Map(); // "/js/comum.js" -> "3f2a9c1b"
+function versaoDe(endereco) {
+  if (!versoes.has(endereco)) {
+    const arquivo = path.join(PASTA_PUBLICA, endereco);
+    const conteudo = arquivo.startsWith(PASTA_PUBLICA) && fs.existsSync(arquivo) ? fs.readFileSync(arquivo) : '';
+    versoes.set(endereco, crypto.createHash('sha1').update(conteudo).digest('hex').slice(0, 8));
+  }
+  return versoes.get(endereco);
+}
+const paginas = new Map(); // nome da tela -> HTML já com as versões
+function paginaComVersoes(nome) {
+  if (!paginas.has(nome)) {
+    const html = fs.readFileSync(path.join(PASTA_PUBLICA, `${nome}.html`), 'utf8')
+      .replace(/(src|href)="(\/(?:js|css)\/[^"?]+)"/g, (trecho, atributo, endereco) => `${atributo}="${endereco}?v=${versaoDe(endereco)}"`);
+    paginas.set(nome, html);
+  }
+  return paginas.get(nome);
+}
+function enviarPagina(nome, res) {
+  res.type('html').send(paginaComVersoes(nome));
+}
+
 const ROTULO_TIPO = { CLT: 'CLT', MEI: 'MEI', AGENCIA: 'Agência', FREELANCER: 'Freelancer' };
 
 function criarApp() {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1); // o Render fica na frente do sistema; isso faz o cookie seguro e o IP funcionarem
+  // Comprime as respostas (gzip): as listas grandes (ex.: Lojas por UF) ficam cerca de 10 vezes menores na rede.
+  app.use(compression());
 
   app.use((req, res, next) => {
     res.set({
@@ -64,13 +96,18 @@ function criarApp() {
     if (!usuario) return res.redirect('/login');
     if (req.path.startsWith('/usuarios') && usuario.perfil !== 'suporte') return res.redirect('/resumo');
     res.set('Cache-Control', 'no-store'); // não guardar a tela no navegador, para o "voltar" depois de sair não mostrá-la
-    next();
+    enviarPagina(req.params[0], res);
   });
-  app.get(/^\/login(\.html)?\/?$/, async (req, res, next) => {
+  app.get(/^\/login(\.html)?\/?$/, async (req, res) => {
     if (await auth.usuarioDaSessao(req)) return res.redirect('/resumo'); // já está logado
-    next();
+    res.set('Cache-Control', 'no-cache');
+    enviarPagina('login', res);
   });
-  app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
+  app.use(express.static(PASTA_PUBLICA, {
+    extensions: ['html'],
+    // Arquivo pedido com versão (?v=...) não muda nunca: o navegador pode guardar por 1 ano sem perguntar de novo.
+    setHeaders: (res) => { if (res.req.query.v) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); },
+  }));
 
   // ---------- Login ----------
   app.post('/api/login', async (req, res) => {
