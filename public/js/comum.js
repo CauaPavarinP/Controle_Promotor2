@@ -118,6 +118,8 @@ function desenharMenu(usuario) {
 // Se já sabemos quem é o usuário, o menu aparece na hora e a conferência com o servidor roda em segundo
 // plano (se o login tiver expirado, "api" manda para a tela de login).
 async function iniciarPagina() {
+  // As listas dos filtros não dependem de quem está logado: já pede junto, em vez de esperar /api/eu responder.
+  if (!guardado('opcoes')) buscarOpcoes();
   const conhecido = guardado('eu');
   const conferir = api('/api/eu').then((usuario) => {
     if (JSON.stringify(usuario) !== JSON.stringify(conhecido)) { guardar('eu', usuario); desenharMenu(usuario); }
@@ -131,9 +133,18 @@ async function iniciarPagina() {
 
 // Listas dos filtros (meses com dados, empresas, agências, meta). Usa a resposta guardada, se houver,
 // e já busca uma nova para a próxima tela. Depois de uma importação a memória é apagada (ver importar.js).
+let opcoesEmAndamento = null; // pedido de /api/opcoes já saindo (para não pedir duas vezes ao mesmo tempo)
+function buscarOpcoes() {
+  if (!opcoesEmAndamento) {
+    opcoesEmAndamento = api('/api/opcoes').then((opcoes) => { guardar('opcoes', opcoes); return opcoes; })
+      .finally(() => { opcoesEmAndamento = null; });
+  }
+  return opcoesEmAndamento;
+}
+
 async function carregarOpcoes() {
   const conhecidas = guardado('opcoes');
-  const buscar = api('/api/opcoes').then((opcoes) => { guardar('opcoes', opcoes); return opcoes; });
+  const buscar = buscarOpcoes();
   if (!conhecidas) return buscar;
   buscar.catch(() => {});
   return conhecidas;
