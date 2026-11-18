@@ -309,3 +309,9 @@ button.link:focus-visible { outline: 2px solid var(--principal); outline-offset:
 /* A célula da lista aberta é a única da linha: não herda as regras da primeira e da última coluna. */
 .tabela-sup tr.detalhe-sup > td { white-space: normal; width: auto; min-width: 0; text-align: left; }
 #painel-sem-supervisor .ajuda { margin-bottom: 12px; }
+
+/* Importar: escolha entre substituir ou somar os atendimentos repetidos com valores diferentes */
+.escolha-modo { border: 1px solid var(--borda); border-radius: 8px; padding: 10px 14px; margin: 12px 0 0; }
+.escolha-modo legend { font-weight: 600; font-size: 14px; padding: 0 4px; }
+.escolha-modo label { display: block; padding: 4px 0; cursor: pointer; }
+.escolha-modo .ajuda { margin: 4px 0 0; }

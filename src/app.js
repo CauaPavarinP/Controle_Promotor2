@@ -354,13 +354,13 @@ function criarApp() {
     res.json(await gravar(dados, req.usuario.nome));
   });
 
-  // Prévia: antes de gravar, a tela mostra o que vai ser substituído ("Isto vai substituir todo o mês...").
+  // Prévia: antes de gravar, a tela mostra por mês quantos registros são novos e quantos já existem (iguais ou diferentes).
   api.post('/importar/previa', express.json({ limit: '50mb' }), async (req, res) => {
     res.json(await previaDaImportacao(req.body && typeof req.body === 'object' ? req.body : {}));
   });
 
-  // Desfaz uma importação: apaga o que ela gravou e restaura o que ela tinha substituído.
-  // Só a mais recente de cada mês/tipo; a do cadastro de promotores não pode ser desfeita.
+  // Desfaz uma importação: apaga o que ela gravou e volta, da cópia, o que ela tinha alterado.
+  // Bloqueada se uma importação mais nova já alterou as mesmas linhas; a do cadastro de promotores não pode ser desfeita.
   api.delete('/importacoes/:id', async (req, res) => {
     try {
       res.json({ ok: true, ...(await desfazerImportacao(Number(req.params.id), String(req.query.confirmacao || ''))) });

@@ -54,7 +54,7 @@
       </div>
       <div class="painel">
         <h2>Últimas importações</h2>
-        <p class="ajuda">"Total" é o valor daquele arquivo. Importar de novo o mesmo mês substitui o que havia, então a soma desta lista não é o total que está no sistema.</p>
+        <p class="ajuda">"Total" é o valor daquele arquivo. Um arquivo pode atualizar registros de outro, então a soma desta lista não é o total que está no sistema.</p>
         <div class="rolagem">
           <table class="compacta">
             <thead><tr><th>Quando e quem</th><th>Arquivo</th><th>Meses</th><th class="num">Registros</th><th class="num">Ignoradas</th><th class="num">Total</th><th></th></tr></thead>
@@ -66,7 +66,13 @@
         <form method="dialog">
           <h2 id="previa-titulo">Confirmar a importação</h2>
           <div id="previa-texto" class="aviso-dados"></div>
-          <p class="ajuda" id="previa-ajuda">Uma cópia do que existe hoje fica guardada: dá para desfazer depois em "Últimas importações" (só a importação mais recente de cada mês).</p>
+          <fieldset class="escolha-modo" id="previa-modo" hidden>
+            <legend>Atendimentos que já existem com valores diferentes:</legend>
+            <label><input type="radio" name="previa-modo" id="previa-modo-substituir" value="substituir" checked> <strong>Substituir</strong> pelos valores do arquivo</label>
+            <label><input type="radio" name="previa-modo" id="previa-modo-somar" value="somar"> <strong>Somar</strong> aos que estão no sistema (visitas e valor somados)</label>
+            <p class="ajuda">Os iguais não mudam em nenhuma das duas opções. Atenção: "Somar" o mesmo arquivo duas vezes soma de novo. Se errar, use o Desfazer.</p>
+          </fieldset>
+          <p class="ajuda" id="previa-ajuda">Uma cópia do que for alterado fica guardada: dá para desfazer depois em "Últimas importações".</p>
           <div class="botoes"><button type="button" class="secundario" id="previa-cancelar">Cancelar</button><button type="submit" id="previa-ok">Substituir e importar</button></div>
         </form>
       </dialog>

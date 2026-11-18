@@ -15,8 +15,8 @@ const AJUDA = {
   promotores: 'Aba "Promotores CLT" do modelo padrão: nome, código, salário e adicionais. Quem já está cadastrado tem os valores atualizados.',
 };
 const SUBSTITUI = {
-  faturamento: 'Atenção: o arquivo substitui o MÊS INTEIRO de cada empresa que ele traz. Cliente que não estiver no arquivo sai desse mês. Antes de gravar, o sistema mostra quantos registros serão substituídos.',
-  visitas: 'Atenção: o arquivo substitui o MÊS INTEIRO das agências que ele traz (as outras agências não mudam). Loja que não estiver no arquivo sai desse mês, inclusive as lançadas à mão. Antes de gravar, o sistema mostra quantos registros serão substituídos.',
+  faturamento: 'O arquivo complementa o que já existe: nada é apagado. Mesmo mês + CNPJ + empresa que já está no sistema fica com o valor do arquivo. Antes de gravar, o sistema mostra quantos são novos e quantos já existem.',
+  visitas: 'O arquivo complementa o que já existe: nada é apagado (inclusive o lançado à mão). O mesmo promotor, na mesma loja e no mesmo mês que já está no sistema é atualizado; se os valores forem diferentes, você escolhe substituir ou somar. Antes de gravar, o sistema mostra quantos são novos e quantos já existem.',
   promotores: 'Atenção: para quem já está cadastrado, o salário e os demais valores passam a ser os deste arquivo.',
 };
 
@@ -117,7 +117,7 @@ function ajustarMeses(temData) {
   el('ajuda-mes').textContent = !temData
     ? 'O arquivo não tem coluna de data: todas as linhas vão para o mês escolhido.'
     : campo.value === 'todos'
-      ? 'Cada linha vai para o mês da sua data. A confirmação mostra cada mês que será substituído.'
+      ? 'Cada linha vai para o mês da sua data. A confirmação mostra, por mês, o que é novo e o que já existe.'
       : `Só as linhas de ${rotuloMes(campo.value)} entram (e as sem data). As de outros meses ficam de fora.`;
 }
 
@@ -199,14 +199,17 @@ function opcoesDaTela(tipo, mapa) {
   return opcoes;
 }
 
-// Mostra na tela o que vai ser substituído e espera a pessoa confirmar. Devolve true (confirmou) ou false.
+// Mostra na tela o que a importação vai fazer e espera a pessoa confirmar.
+// Devolve false (cancelou) ou o modo escolhido para os repetidos com valores diferentes: 'substituir' ou 'somar'.
 function perguntar(previa, tipo) {
   const janela = el('janela-previa');
   el('previa-texto').innerHTML = previa.mensagem.split('\n').map((linha) => `<p>${esc(linha)}</p>`).join('');
   el('previa-ajuda').hidden = tipo === 'promotores';
-  el('previa-ok').textContent = tipo === 'promotores' ? 'Atualizar o cadastro' : 'Substituir e importar';
+  el('previa-modo').hidden = !previa.permiteSomar;
+  el('previa-modo-substituir').checked = true;
+  el('previa-ok').textContent = tipo === 'promotores' ? 'Atualizar o cadastro' : 'Importar';
   return new Promise((responder) => {
-    const fechar = (resposta) => { janela.close(); responder(resposta); };
+    const fechar = (confirmou) => { janela.close(); responder(confirmou && (el('previa-modo-somar').checked ? 'somar' : 'substituir')); };
     el('previa-cancelar').onclick = () => fechar(false);
     janela.onclose = () => responder(false); // tecla Esc
     janela.querySelector('form').onsubmit = (evento) => { evento.preventDefault(); fechar(true); };
@@ -239,12 +242,14 @@ async function confirmar() {
 
     const { itens, motivos, avisos } = agrupador.resultado();
     if (!itens.length) throw new Error(`Nenhuma linha válida no arquivo. ${Object.keys(motivos).join('; ')}`);
-    // Antes de gravar: "Isto vai substituir todo o mês X (N registros atuais)". Só grava se a pessoa confirmar.
+    // Antes de gravar: quantos são novos e quantos já existem, por mês. Só grava se a pessoa confirmar.
     const envio = { tipo, arquivo: arquivo.name, itens, motivos, avisos };
     progresso('Conferindo o que já existe nesses meses…');
     const previa = await api('/api/importar/previa', { method: 'POST', json: envio });
     progresso('');
-    if (!(await perguntar(previa, tipo))) { mostrarAviso(aviso, 'Importação cancelada. Nada foi gravado.', ''); return; }
+    const modo = await perguntar(previa, tipo);
+    if (!modo) { mostrarAviso(aviso, 'Importação cancelada. Nada foi gravado.', ''); return; }
+    envio.modo = modo;
     progresso(`Gravando ${itens.length} registro(s)…`);
     const r = await api('/api/importar/gravar', { method: 'POST', json: envio });
 
@@ -252,7 +257,9 @@ async function confirmar() {
     const partes = [tipo === 'promotores'
       ? `Importação concluída: ${r.importadas} promotor(es), custo mensal somado de ${reais(r.total)}.`
       : `Importação concluída: ${r.importadas} registro(s), total ${reais(r.total)}, mês(es) ${r.meses.map(rotuloMes).join(', ')}.`];
-    if (r.substituidas) partes.push(`${r.substituidas} registro(s) antigo(s) desses meses foram substituídos (a cópia ficou guardada para desfazer).`);
+    if (r.novos !== undefined) partes.push(`${r.novos} novo(s)${r.iguais ? `; ${r.iguais} já existia(m) igual(is)` : ''}; nada foi apagado.`);
+    if (r.substituidas) partes.push(`${r.substituidas} que já existia(m) com valores diferentes foram substituído(s) pelos do arquivo (a cópia ficou guardada para desfazer).`);
+    if (r.somadas) partes.push(`${r.somadas} que já existia(m) foram somado(s) com os do arquivo (a cópia ficou guardada para desfazer).`);
     if (r.lojasNovas) partes.push(`${r.lojasNovas} loja(s) nova(s) cadastrada(s).`);
     if (r.clientesNovos) partes.push(`${r.clientesNovos} CNPJ(s) novo(s) no faturamento do ERP.`);
     if (r.promotoresNovos) partes.push(`${r.promotoresNovos} promotor(es) novo(s) cadastrado(s).`);
