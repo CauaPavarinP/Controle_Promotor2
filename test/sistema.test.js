@@ -270,7 +270,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     }
   });
 
-  await t.test('faturamento: reimportar substitui o mês inteiro; a prévia avisa; desfazer restaura o anterior', async () => {
+  await t.test('faturamento: importar complementa (nada é apagado); mesmo mês + CNPJ + empresa substitui; desfazer volta', async () => {
     const C1 = '11222333000181'; const C2 = '22222333000106'; const C3 = '33333444000106';
     const fat = (linhas, arquivo) => ({
       tipo: 'faturamento', arquivo,
@@ -279,51 +279,95 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
     const previa = (d) => regis('/api/importar/previa', { method: 'POST', json: d });
     const totalMaio = async () => (await regis('/api/faturamento?de=2026-05&ate=2026-05')).dados.totais.faturamento;
+    const resumoPrevia = (p) => p.linhas.map((l) => [l.mes, l.empresa, l.novos, l.iguais, l.diferentes]);
 
-    await gravar(fat([[C3, 500, '63']], 'empresa63.xls')); // outra empresa no mesmo mês: não pode ser apagada
+    await gravar(fat([[C3, 500, '63']], 'empresa63.xls')); // outra empresa no mesmo mês
     const v1 = fat([[C1, 1000], [C2, 2000]], 'maio-v1.xls');
-    assert.equal((await previa(v1)).dados.mensagem, 'Isto vai substituir todo o mês mai/2026 da empresa 60 (0 registros atuais).');
+    const p1 = (await previa(v1)).dados;
+    assert.deepEqual(resumoPrevia(p1), [['2026-05', '60', 2, 0, 0]]);
+    assert.equal(p1.permiteSomar, false); // faturamento: sempre substitui o repetido
     await gravar(v1);
     assert.equal(await totalMaio(), 3500);
 
-    const v2 = fat([[C1, 1500]], 'maio-v2.xls'); // o C2 saiu do arquivo
-    assert.equal((await previa(v2)).dados.mensagem, 'Isto vai substituir todo o mês mai/2026 da empresa 60 (2 registros atuais).');
+    const v2 = fat([[C1, 1500], [C2, 2000]], 'maio-v2.xls'); // C1 corrigido; C2 igual
+    const p2 = (await previa(v2)).dados;
+    assert.deepEqual(resumoPrevia(p2), [['2026-05', '60', 0, 1, 1]]);
+    assert.match(p2.mensagem, /Nada será apagado/);
+    assert.match(p2.mensagem, /no sistema R\$\s1\.000,00 → no arquivo R\$\s1\.500,00/);
     assert.equal(await totalMaio(), 3500); // a prévia não grava nada
-    assert.equal((await gravar(v2)).dados.substituidas, 2);
-    assert.equal(await totalMaio(), 2000); // 1.500 do C1 + 500 da empresa 63; o C2 sumiu
+    const r2 = (await gravar(v2)).dados;
+    assert.deepEqual([r2.novos, r2.iguais, r2.substituidas], [0, 1, 1]);
+    assert.equal(await totalMaio(), 4000); // 1.500 + 2.000 + 500
 
-    // Só a mais recente de cada mês pode ser desfeita.
+    const v3 = fat([[C1, 700]], 'maio-v3.xls'); // só o C1: o C2 e a empresa 63 continuam
+    await gravar(v3);
+    assert.equal(await totalMaio(), 3200); // 700 + 2.000 + 500
+
+    // Desfazer: bloqueia só quem teve linhas alteradas por uma importação mais nova.
     const lista = async () => Object.fromEntries((await regis('/api/importacoes')).dados.map((i) => [i.arquivo, i]));
     let imps = await lista();
-    assert.deepEqual([imps['empresa63.xls'].podeDesfazer, imps['maio-v1.xls'].podeDesfazer, imps['maio-v2.xls'].podeDesfazer], [false, false, true]);
-    assert.equal((await regis(`/api/importacoes/${imps['maio-v1.xls'].id}`, { method: 'DELETE' })).status, 400);
-    const d = (await regis(`/api/importacoes/${imps['maio-v2.xls'].id}`, { method: 'DELETE' })).dados;
-    assert.deepEqual([d.registros, d.restaurados], [1, 2]);
+    assert.deepEqual(['empresa63.xls', 'maio-v1.xls', 'maio-v2.xls', 'maio-v3.xls'].map((a) => imps[a].podeDesfazer), [true, false, false, true]);
+    assert.equal((await regis(`/api/importacoes/${imps['maio-v2.xls'].id}`, { method: 'DELETE' })).status, 400);
+    let d = (await regis(`/api/importacoes/${imps['maio-v3.xls'].id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.restaurados], [1, 1]);
+    assert.equal(await totalMaio(), 4000); // o C1 voltou para 1.500
+    d = (await regis(`/api/importacoes/${(await lista())['maio-v2.xls'].id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.restaurados], [2, 2]);
     assert.equal(await totalMaio(), 3500); // voltou o que o v1 tinha gravado
     imps = await lista();
-    assert.equal(imps['maio-v1.xls'].podeDesfazer, true); // agora ela é a mais recente de maio
-    const d1 = (await regis(`/api/importacoes/${imps['maio-v1.xls'].id}`, { method: 'DELETE' })).dados;
-    assert.deepEqual([d1.registros, d1.restaurados], [2, 0]);
+    assert.equal(imps['maio-v1.xls'].podeDesfazer, true);
+    d = (await regis(`/api/importacoes/${imps['maio-v1.xls'].id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.restaurados], [2, 0]);
     assert.equal(await totalMaio(), 500);
   });
 
-  await t.test('atendimentos: reimportar substitui o mês só das agências do arquivo; desfazer restaura', async () => {
-    const vis = (agencia, lojas, arquivo) => ({
+  await t.test('atendimentos: importar complementa; repetido diferente substitui ou soma; desfazer volta', async () => {
+    const vis = (agencia, lojas, arquivo, visitas = 1, custo = 10) => ({
       tipo: 'visitas', arquivo,
-      itens: lojas.map((nome) => ({ promotor: { nome: `P ${agencia}`, tipo: 'AGENCIA', agencia }, loja: { nome, cnpj: '', cidade: 'Y' }, mes: '2026-06', visitas: 1, custo: 10 })),
+      itens: lojas.map((nome) => ({ promotor: { nome: `P ${agencia}`, tipo: 'AGENCIA', agencia }, loja: { nome, cnpj: '', cidade: 'Y' }, mes: '2026-06', visitas, custo })),
     });
     const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
     const lojasDeJunho = async () => (await regis('/api/lojas-uf?de=2026-06&ate=2026-06')).dados.linhas.map((l) => l.loja).sort();
+    const l1 = async () => {
+      const [v] = await consulta("SELECT v.qtd_visitas, v.custo::float AS custo FROM visitas v JOIN lojas l ON l.id = v.loja_id WHERE l.nome = 'L1' AND v.mes = '2026-06'");
+      return [v.qtd_visitas, v.custo];
+    };
     await gravar(vis('Ag A', ['L1', 'L2'], 'a1.xlsx'));
     await gravar(vis('Ag B', ['L3'], 'b1.xlsx'));
-    const a2 = vis('Ag A', ['L1'], 'a2.xlsx'); // a L2 saiu do arquivo da agência A
+
+    // A2: L1 com valores diferentes e L4 nova; a L2 não veio no arquivo e CONTINUA.
+    const a2 = vis('Ag A', ['L1', 'L4'], 'a2.xlsx', 2, 25);
     const previa = (await regis('/api/importar/previa', { method: 'POST', json: a2 })).dados;
-    assert.equal(previa.mensagem, 'Isto vai substituir todo o mês jun/2026 da(s) agência(s) Ag A (2 registros atuais, inclusive os lançados à mão na tela).');
-    assert.equal((await gravar(a2)).dados.substituidas, 2);
-    assert.deepEqual(await lojasDeJunho(), ['L1', 'L3']); // a agência B ficou como estava
-    const imp = (await regis('/api/importacoes')).dados.find((i) => i.arquivo === 'a2.xlsx');
-    const d = (await regis(`/api/importacoes/${imp.id}`, { method: 'DELETE' })).dados;
-    assert.deepEqual([d.registros, d.restaurados], [1, 2]);
+    assert.deepEqual(previa.linhas.map((l) => [l.mes, l.novos, l.iguais, l.diferentes]), [['2026-06', 1, 0, 1]]);
+    assert.equal(previa.permiteSomar, true);
+    assert.match(previa.mensagem, /P Ag A – L1 \(jun\/2026\): no sistema 1 visita \/ R\$\s10,00 → no arquivo 2 visitas \/ R\$\s25,00/);
+    const r2 = (await gravar({ ...a2, modo: 'substituir' })).dados;
+    assert.deepEqual([r2.novos, r2.iguais, r2.substituidas, r2.somadas], [1, 0, 1, 0]);
+    assert.deepEqual(await lojasDeJunho(), ['L1', 'L2', 'L3', 'L4']);
+    assert.deepEqual(await l1(), [2, 25]);
+
+    // A3 com "somar": 2 + 3 visitas e R$ 25 + R$ 5.
+    const r3 = (await gravar({ ...vis('Ag A', ['L1'], 'a3.xlsx', 3, 5), modo: 'somar' })).dados;
+    assert.deepEqual([r3.novos, r3.substituidas, r3.somadas], [0, 0, 1]);
+    assert.deepEqual(await l1(), [5, 30]);
+    // O mesmo arquivo de novo, igual ao que está no sistema: "iguais", não muda nada.
+    const r4 = (await gravar({ ...vis('Ag A', ['L1'], 'a4.xlsx', 5, 30), modo: 'somar' })).dados;
+    assert.deepEqual([r4.novos, r4.iguais, r4.somadas], [0, 1, 0]);
+    assert.deepEqual(await l1(), [5, 30]);
+
+    // Desfazer da mais nova para a mais antiga; a agência B é independente e pode ser desfeita a qualquer hora.
+    const lista = async () => Object.fromEntries((await regis('/api/importacoes')).dados.map((i) => [i.arquivo, i]));
+    let imps = await lista();
+    assert.deepEqual(['a1.xlsx', 'b1.xlsx', 'a2.xlsx', 'a3.xlsx', 'a4.xlsx'].map((a) => imps[a].podeDesfazer), [false, true, false, false, true]);
+    for (const arquivo of ['a4.xlsx', 'a3.xlsx']) {
+      imps = await lista();
+      assert.equal((await regis(`/api/importacoes/${imps[arquivo].id}`, { method: 'DELETE' })).status, 200);
+    }
+    assert.deepEqual(await l1(), [2, 25]);
+    imps = await lista();
+    const d = (await regis(`/api/importacoes/${imps['a2.xlsx'].id}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.restaurados], [2, 1]); // apagou L1 e L4; L1 voltou como era
+    assert.deepEqual(await l1(), [1, 10]);
     assert.deepEqual(await lojasDeJunho(), ['L1', 'L2', 'L3']);
 
     // O cadastro de promotores não pode ser desfeito.
@@ -394,9 +438,9 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.ok(!nomesPromotores.some((n) => /jesus|leo/i.test(n)));
     assert.equal((await regis('/api/promotores', { method: 'POST', json: { nome: 'Fulano', tipo: 'CLT', cargo: 'Supervisor' } })).status, 400);
 
-    // Reimportar (substitui o mês da agência) e desfazer: os vínculos voltam a partir do texto original.
+    // Reimportar a Loja S1 com outro supervisor (substitui só ela; a S2 continua) e desfazer: os vínculos voltam.
     await gravar({ ...arquivo, arquivo: 'sup-v2.xlsx', itens: [linha('Carla', 'Loja S1', 'Leo')] });
-    assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), []);
+    assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), ['Loja S2']);
     const imp = (await regis('/api/importacoes')).dados.find((i) => i.arquivo === 'sup-v2.xlsx');
     assert.equal((await regis(`/api/importacoes/${imp.id}`, { method: 'DELETE' })).status, 200);
     assert.deepEqual(await lojas(`&supervisor=${ids['Jesus Angels Zapata Rivas']}`), ['Loja S1', 'Loja S2']);
@@ -471,16 +515,16 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal((await regis('/api/promotores/nao-identificados')).dados.pendentes.filter((x) => x.agencia === 'Agência Q').length, 0);
   });
 
-  await t.test('MEIs sem agência: o arquivo de um não apaga o mês do outro', async () => {
+  await t.test('MEIs sem agência: o arquivo de um não apaga nada (nem o do outro, nem o dele)', async () => {
     const mei = (nome, loja) => ({ tipo: 'visitas', arquivo: `${nome}.xlsx`, itens: [{ promotor: { nome, tipo: 'MEI', agencia: '' }, loja: { nome: loja, cnpj: '', cidade: 'M' }, mes: '2026-01', visitas: 1, custo: 20 }] });
     const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
     const lojasDeJaneiro = async () => (await regis('/api/lojas-uf?de=2026-01&ate=2026-01')).dados.linhas.map((l) => l.loja).sort();
     await gravar(mei('Mei Um', 'Loja X'));
     await gravar(mei('Mei Dois', 'Loja Y'));
     const previa = (await regis('/api/importar/previa', { method: 'POST', json: mei('Mei Um', 'Loja Z') })).dados;
-    assert.match(previa.mensagem, /\(1 registros atuais/); // só o do próprio Mei Um
+    assert.deepEqual(previa.linhas.map((l) => [l.novos, l.iguais, l.diferentes]), [[1, 0, 0]]); // Loja Z é nova
     await gravar(mei('Mei Um', 'Loja Z'));
-    assert.deepEqual(await lojasDeJaneiro(), ['Loja Y', 'Loja Z']);
+    assert.deepEqual(await lojasDeJaneiro(), ['Loja X', 'Loja Y', 'Loja Z']); // complementa: a Loja X continua
   });
 
   await t.test('importação antiga sem cópia: só apaga se digitar APAGAR', async () => {

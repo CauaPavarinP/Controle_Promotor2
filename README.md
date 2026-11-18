@@ -63,12 +63,13 @@ Pode haver diferença de centavos entre um total e a soma das linhas, por arredo
 - No relatório de faturamento do Focco, as colunas usadas são `CNPJ CPF`, `CLIENTE`, `DT EMIS`, `VLR TOTAL`, `COD EMP`, `CIDADE` e `UF`. Cada linha é um item de nota; o sistema soma tudo por cliente e mês.
 - O sistema reconhece as colunas pelo nome do cabeçalho e mostra para conferir. Dá para corrigir na tela.
 - Em planilhas com várias abas, ele escolhe sozinho a aba com mais colunas reconhecidas para o tipo escolhido.
-- **Importar substitui o mês inteiro** (não soma, e o que saiu do arquivo some):
-  - **Faturamento:** antes de gravar, apaga todo o faturamento dos **meses e empresas** que o arquivo traz. Por isso, exporte do Focco sempre o **mês inteiro** de cada empresa.
-  - **Atendimentos:** apaga todos os atendimentos dos **meses** do arquivo feitos pelas **agências** do arquivo (e pelos promotores dele), inclusive os lançados à mão na tela. É por agência, e não o mês de todo mundo, porque cada agência manda o próprio arquivo: importar o arquivo da agência A não apaga o que veio da agência B. A agência é a do texto do arquivo (coluna "Agência ou MEI"); um CLT achado pelo código entra só ele, sem levar junto a agência que tem no cadastro. **Linha sem agência** (ex.: MEI) apaga só os atendimentos dos promotores daquele arquivo, nunca o grupo "Sem agência" inteiro.
+- **Importar complementa o que já existe: nada é apagado.** O que já está no sistema e não veio no arquivo continua (inclusive o lançado à mão na tela).
+  - **Faturamento:** o registro é o **mês + CNPJ + código da empresa**. Se já existe, o valor do arquivo **substitui** o que estava; se não existe, entra. Atenção: se o Focco dividir o mesmo mês da mesma empresa em dois arquivos e o mesmo CNPJ aparecer nos dois, o segundo substitui o primeiro (não soma).
+  - **Atendimentos:** o "mesmo atendimento" é o **mesmo promotor, na mesma loja, no mesmo mês**. Se não existe, entra. Se existe com os **mesmos valores**, fica como está. Se existe com **valores diferentes**, a confirmação pergunta: **Substituir** pelos valores do arquivo (padrão) ou **Somar** (visitas e valor somados; os supervisores dos dois ficam juntos). Somar o mesmo arquivo duas vezes soma de novo; se errar, use o Desfazer.
   - **Cadastro de promotores:** atualiza quem já existe e cria quem não existe. Ninguém é apagado.
+  - Como nada some sozinho, uma loja que saiu da agência ou um cliente corrigido no Focco continuam no sistema até alguém **desfazer a importação** ou **excluir à mão**.
 - **Meses a importar:** com coluna de data no arquivo, a opção padrão é **Todos os meses do arquivo** (cada linha vai para o mês da sua data). Escolhendo um mês, só as linhas daquele mês entram (as sem data também); as outras aparecem como "Fora do mês escolhido". Sem coluna de data, é obrigatório escolher o mês, e todas as linhas vão para ele.
-- **Antes de gravar**, a tela mostra o que vai ser substituído, por exemplo: "Isto vai substituir todo o mês out/2026 da empresa 60 (1.533 registros atuais)". Só grava se a pessoa confirmar.
+- **Antes de gravar**, a tela mostra por mês quantos registros são **novos** e quantos **já existem** (iguais ou com valores diferentes), com exemplos dos diferentes (ex.: "Ana – Loja A (jan/2026): no sistema 4 visitas / R$ 240,00 → no arquivo 5 visitas / R$ 300,00"). Só grava se a pessoa confirmar.
 - Linhas de total ou em branco são ignoradas e aparecem contadas no aviso final, junto com o que precisa ser conferido.
 
 ### Os três tipos de importação
@@ -131,8 +132,8 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 
 ## Desfazer e excluir
 
-- **Importar → Desfazer** apaga o que a importação gravou e **restaura o que ela tinha substituído**, numa transação só. Antes de substituir um mês, a importação guarda uma cópia das linhas antigas na tabela `importacoes_backup` (`importacao_id`, `tabela`, `dados` em JSON).
-- Só a **importação mais recente de cada mês e tipo** pode ser desfeita (as outras mostram "há uma mais nova"). Para voltar mais, desfaça uma por vez, da mais nova para a mais antiga.
+- **Importar → Desfazer** apaga o que a importação gravou (o que entrou e o que ela alterou) e **volta como estava** o que ela alterou, numa transação só. Antes de alterar uma linha que já existia, a importação guarda a linha antiga na tabela `importacoes_backup` (`importacao_id`, `tabela`, `dados` em JSON).
+- Uma importação **não** pode ser desfeita se uma importação **mais nova já alterou as mesmas linhas** (aparece "Uma importação mais nova já alterou dados desta"). Desfaça antes a mais nova. Importações que não mexem nas mesmas linhas (ex.: agência A e agência B no mesmo mês) podem ser desfeitas em qualquer ordem.
 - A importação do **cadastro de promotores não pode ser desfeita** (o botão não aparece). Corrija o promotor na tela ou importe o cadastro de novo.
 - Importações feitas **antes da cópia de segurança** (`restauravel = false`) mostram o botão **"Apagar (sem cópia)"**: ele só apaga, o dado anterior não volta, e só funciona se a pessoa digitar **APAGAR**.
 - Lojas, clientes do ERP e promotores cadastrados por uma importação continuam no sistema depois do Desfazer.
