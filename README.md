@@ -127,6 +127,7 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **Compressão (gzip)** em todas as respostas: as listas grandes chegam cerca de 10 vezes menores (Lojas por UF, 12 meses: 383 KB → 28 KB).
 - **CSS e JS com versão no endereço** (`/js/comum.js?v=<resumo do conteúdo>`): o navegador guarda o arquivo por até 1 ano e não pergunta de novo a cada tela. Quando o arquivo muda numa publicação, a versão muda e o navegador baixa o novo. As telas (HTML) continuam sem cache.
 - As listas dos filtros (`/api/opcoes`) são pedidas junto com o usuário logado (`/api/eu`), e não depois.
+- **Melhoria futura (segurança):** o `npm audit` aponta um alerta moderado na biblioteca `uuid`, usada por dentro do `exceljs` (exportações para Excel). Não veio da mudança de velocidade: já existia. A correção sugerida pelo npm (`npm audit fix --force`) troca o `exceljs` por uma versão antiga e incompatível, o que pode quebrar as exportações. Corrigir com calma: ver se uma versão nova do `exceljs` já usa um `uuid` corrigido, atualizar e testar todas as exportações.
 - **Plano gratuito do Render:** o servidor desliga depois de um tempo sem uso, e a primeira visita seguinte espera ele ligar de novo. Isso só some num plano pago.
 
 ## Segurança
