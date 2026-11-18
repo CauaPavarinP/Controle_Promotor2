@@ -210,9 +210,9 @@ DATABASE_URL_TESTE=postgres://usuario:senha@localhost:5432/promotor_teste npm te
 
 ## Backup e restauração
 
-Precisa das ferramentas do PostgreSQL (`pg_dump` e `pg_restore`) na mesma versão do banco ou mais nova (o banco do Render é PostgreSQL 16). No Windows, vêm no instalador do PostgreSQL (marque "Command Line Tools"); no Linux, `sudo apt install postgresql-client`. Os dois comandos usam o `DATABASE_URL` do `.env`.
+Precisa das ferramentas do PostgreSQL (`pg_dump` e `pg_restore`) na mesma versão do banco ou mais nova (o banco do Render é PostgreSQL 16; no Neon, confira a versão do projeto no painel: se for 17, instale as ferramentas da versão 17). No Windows, vêm no instalador do PostgreSQL (marque "Command Line Tools"); no Linux, `sudo apt install postgresql-client`. Os dois comandos usam o `DATABASE_URL` do `.env`.
 
-Fazer o backup (cria `backups/promotor-AAAA-MM-DD_HHMM.dump`; a pasta `backups/` não vai para o Git):
+Fazer o backup (cria `promotor-AAAA-MM-DD_HHMMSS.dump` na pasta de backup; a pasta `backups/` do projeto não vai para o Git):
 
 ```bash
 npm run backup
@@ -221,8 +221,27 @@ npm run backup
 Restaurar um backup no banco do `DATABASE_URL` (**substitui** os dados atuais desse banco; pede para digitar RESTAURAR e roda numa transação só, então se falhar o banco fica como estava):
 
 ```bash
-npm run restaurar -- backups/promotor-2026-11-17_1030.dump
+npm run restaurar -- backups/promotor-2026-11-17_103000.dump
 ```
+
+### Backup semanal automático (Windows)
+
+Opções no `.env` (todas opcionais):
+
+| Variável | Padrão | O que faz |
+|---|---|---|
+| `BACKUP_PASTA` | pasta `backups` do projeto | Onde salvar. Use uma pasta da empresa que tenha cópia fora do computador (ex.: OneDrive ou pasta de rede) |
+| `BACKUP_MANTER_DIAS` | `60` | Apaga cópias mais velhas que isso, **só depois de um backup novo dar certo** e **sempre mantendo as 4 mais recentes**. `0` = nunca apaga |
+
+Segurança do script: o `pg_dump` grava num arquivo temporário (`.parcial`) e só dá o nome final se terminar certo; se falhar, nada é apagado. Só arquivos com o nome `promotor-...dump` são considerados na limpeza. Cada execução grava uma linha em `backup.log` na pasta de backup (data, OK/ERRO, arquivo e tamanho; nunca a senha).
+
+Agendar no Agendador de Tarefas do Windows (cria ou atualiza a tarefa "Controle de Promotores - backup semanal"):
+
+```bash
+npm run agendar-backup
+```
+
+Padrão: toda segunda às 12:00. Para escolher o dia e a hora: `npm run agendar-backup -- SEX 17:30`. A tarefa roda com o seu usuário quando você está logado; se o computador estiver desligado na hora marcada, roda assim que possível. Ela chama `scripts\backup-agendado.cmd`, que guarda a saída em `backups\ultima-execucao.txt`. Testar na hora: `schtasks /Run /TN "Controle de Promotores - backup semanal"`. Remover: `schtasks /Delete /TN "Controle de Promotores - backup semanal" /F`.
 
 O banco do Render só aceita conexões de fora pelos IPs liberados no painel dele (hoje, o da empresa). Rode os comandos de um computador da empresa, ou libere o IP em *Database → Networking*. O arquivo de backup tem dados da empresa: guarde em local seguro.
 
