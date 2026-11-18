@@ -108,6 +108,25 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   const regis = sessao();
   await regis('/api/login', { method: 'POST', json: { login: 'regis', senha: 'senha-regis' } });
 
+  await t.test('velocidade: tela com versão no CSS/JS, arquivo com versão guardado no navegador e respostas comprimidas', async () => {
+    const tela = await fetch(`${base}/resumo`, { headers: { cookie: suporte.cookie() } });
+    const html = await tela.text();
+    assert.equal(tela.headers.get('cache-control'), 'no-store');
+    const versionado = html.match(/src="(\/js\/comum\.js\?v=[0-9a-f]{8})"/);
+    assert.ok(versionado, 'a tela deve pedir o comum.js com ?v=');
+    assert.match(html, /href="\/css\/estilo\.css\?v=[0-9a-f]{8}"/);
+    const js = await fetch(base + versionado[1], { headers: { 'accept-encoding': 'gzip' } });
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get('cache-control'), /max-age=31536000.*immutable/);
+    assert.equal(js.headers.get('content-encoding'), 'gzip');
+    const semVersao = await fetch(`${base}/js/comum.js`);
+    assert.doesNotMatch(semVersao.headers.get('cache-control') || '', /immutable/); // sem versão, não guarda por muito tempo
+    assert.equal((await fetch(`${base}/resumo`, { redirect: 'manual' })).status, 302); // tela continua exigindo login
+    const login = await fetch(`${base}/login`);
+    assert.equal(login.status, 200);
+    assert.match(await login.text(), /\/js\/login\.js\?v=[0-9a-f]{8}/);
+  });
+
   await t.test('usuário comum importa, mas não administra usuários', async () => {
     assert.equal((await regis('/api/usuarios')).status, 403);
     assert.equal((await regis('/api/usuarios', { method: 'POST', json: { login: 'x12', nome: 'X', senha: '12345678', perfil: 'suporte' } })).status, 403);
