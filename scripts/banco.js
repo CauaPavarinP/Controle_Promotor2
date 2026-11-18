@@ -17,8 +17,9 @@ function conexao() {
     process.exit(1);
   }
   const banco = decodeURIComponent(url.pathname.replace(/^\//, ''));
-  // O banco do Render exige conexão segura (SSL) quando acessado de fora.
-  const ssl = url.searchParams.get('sslmode') || (url.hostname.endsWith('render.com') ? 'require' : 'prefer');
+  // Render e Neon exigem conexão segura (SSL) quando acessados de fora.
+  const exigeSsl = ['render.com', 'neon.tech'].some((dominio) => url.hostname.endsWith(dominio));
+  const ssl = url.searchParams.get('sslmode') || (exigeSsl ? 'require' : 'prefer');
   return {
     descricao: `${banco} em ${url.hostname}`, // sem usuário nem senha, para poder aparecer na tela
     banco,

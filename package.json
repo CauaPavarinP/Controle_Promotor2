@@ -9,7 +9,8 @@
     "dev": "node --watch server.js",
     "test": "node --test test/*.test.js",
     "backup": "node scripts/backup.js",
-    "restaurar": "node scripts/restaurar.js"
+    "restaurar": "node scripts/restaurar.js",
+    "agendar-backup": "node scripts/agendar-backup.js"
   },
   "engines": {
     "node": ">=20"
