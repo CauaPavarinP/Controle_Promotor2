@@ -877,6 +877,42 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     for (let i = 0; i < 5; i++) assert.equal((await consulta('SELECT 1 AS ok'))[0].ok, 1);
   });
 
+  await t.test('excluir visitas da loja: um pedido só, numa transação (tudo ou nada) e 404 quando não há o que apagar', async () => {
+    const item = (loja, mes) => ({ promotor: { nome: 'Excluir Lote', tipo: 'AGENCIA', agencia: 'Ag Lote', codigo: '' }, loja: { nome: loja, cnpj: '', cidade: 'L' }, mes, visitas: 2, custo: 10 });
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'lote.xlsx',
+      itens: [item('Loja Lote A', '2026-01'), item('Loja Lote A', '2026-02'), item('Loja Lote A', '2026-03'), item('Loja Lote B', '2026-01')] } });
+    const [{ pid }] = await consulta("SELECT id AS pid FROM promotores WHERE nome = 'Excluir Lote'");
+    const [{ lid }] = await consulta("SELECT id AS lid FROM lojas WHERE nome = 'Loja Lote A'");
+    const meses = async () => (await consulta('SELECT l.nome, v.mes FROM visitas v JOIN lojas l ON l.id = v.loja_id WHERE v.promotor_id = $1 ORDER BY 1, 2', [pid]))
+      .map((v) => `${v.nome} ${v.mes}`);
+    const excluir = (de, ate) => regis(`/api/promotores/${pid}/lojas/${lid}/visitas?de=${de}&ate=${ate}`, { method: 'DELETE' });
+
+    // Se o banco falhar no meio (aqui, forçado no mês 02), NADA é apagado: antes, o 01 já teria ido embora.
+    await consulta(`CREATE FUNCTION falha_no_meio() RETURNS trigger AS $$ BEGIN
+      IF OLD.mes = '2026-02' THEN RAISE EXCEPTION 'falha simulada'; END IF; RETURN OLD; END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER falha_no_meio BEFORE DELETE ON visitas FOR EACH ROW EXECUTE FUNCTION falha_no_meio();`);
+    try {
+      assert.equal((await excluir('2026-01', '2026-02')).status, 500);
+    } finally {
+      await consulta('DROP TRIGGER falha_no_meio ON visitas; DROP FUNCTION falha_no_meio();');
+    }
+    assert.deepEqual(await meses(), ['Loja Lote A 2026-01', 'Loja Lote A 2026-02', 'Loja Lote A 2026-03', 'Loja Lote B 2026-01']);
+
+    // Normal: apaga só a loja A no período (jan-fev); março e a loja B ficam.
+    const r = await excluir('2026-01', '2026-02');
+    assert.deepEqual([r.status, r.dados.apagados], [200, 2]);
+    assert.deepEqual(await meses(), ['Loja Lote A 2026-03', 'Loja Lote B 2026-01']);
+    // De novo: não há mais nada -> 404 (antes respondia "ok"). Período inválido -> 400.
+    assert.equal((await excluir('2026-01', '2026-02')).status, 404);
+    assert.equal((await excluir('2026-03', '2026-01')).status, 400);
+    assert.equal((await regis(`/api/promotores/${pid}/lojas/abc/visitas?de=2026-01&ate=2026-02`, { method: 'DELETE' })).status, 400);
+
+    // Excluir um atendimento só: 404 quando o id não existe (antes respondia "ok").
+    const [{ vid }] = await consulta('SELECT id AS vid FROM visitas WHERE promotor_id = $1 AND mes = $2', [pid, '2026-03']);
+    assert.equal((await regis(`/api/visitas/${vid}`, { method: 'DELETE' })).status, 200);
+    assert.equal((await regis(`/api/visitas/${vid}`, { method: 'DELETE' })).status, 404);
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

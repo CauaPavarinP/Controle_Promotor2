@@ -6,7 +6,6 @@ const express = require('express');
 const compression = require('compression');
 const cookieSession = require('cookie-session');
 const config = require('./config');
-const { consulta } = require('./db');
 const auth = require('./auth');
 const relatorios = require('./relatorios');
 const supervisores = require('./supervisores');
@@ -141,11 +140,13 @@ function criarApp() {
 
   // Todo endereço com ":id" (ex.: /api/lojas/15) passa por aqui antes. O id tem que ser um número inteiro
   // positivo que caiba na coluna do banco; "abc" ou um número gigante recebem 400 sem nem consultar o banco.
-  api.param('id', (req, res, next, valor) => {
+  const conferirId = (req, res, next, valor) => {
     const id = /^\d{1,10}$/.test(valor) ? Number(valor) : 0;
     if (id < 1 || id > 2147483647) return res.status(400).json({ erro: 'Endereço inválido: o código informado não é um número válido.' });
     next();
-  });
+  };
+  api.param('id', conferirId);
+  api.param('lojaId', conferirId);
 
   api.get('/eu', (req, res) => res.json(req.usuario));
   api.get('/opcoes', async (req, res) => res.json(await relatorios.opcoes()));
@@ -217,13 +218,20 @@ function criarApp() {
   });
   api.delete('/promotores/:id', async (req, res) => {
     // Apaga o promotor e os atendimentos dele (as lojas e o faturamento continuam).
-    const apagados = await consulta('DELETE FROM promotores WHERE id = $1 RETURNING id', [Number(req.params.id)]);
-    if (!apagados.length) return res.status(404).json({ erro: 'Promotor não encontrado.' });
+    const apagado = await relatorios.excluirPromotor(Number(req.params.id));
+    if (!apagado) return res.status(404).json({ erro: 'Promotor não encontrado.' });
     res.json({ ok: true });
   });
   api.delete('/visitas/:id', async (req, res) => {
-    await consulta('DELETE FROM visitas WHERE id = $1', [Number(req.params.id) || 0]);
+    const apagado = await relatorios.excluirVisita(Number(req.params.id));
+    if (!apagado) return res.status(404).json({ erro: 'Atendimento não encontrado (talvez já tenha sido excluído).' });
     res.json({ ok: true });
+  });
+  // Todos os atendimentos do promotor numa loja, no período (?de=AAAA-MM&ate=AAAA-MM), de uma vez só.
+  api.delete('/promotores/:id/lojas/:lojaId/visitas', async (req, res) => {
+    const apagado = await relatorios.excluirVisitasDaLoja(Number(req.params.id), Number(req.params.lojaId), req.query);
+    if (!apagado) return res.status(404).json({ erro: 'Nenhum atendimento deste promotor nesta loja no período (talvez já tenham sido excluídos).' });
+    res.json({ ok: true, apagados: apagado.apagados });
   });
 
   // ---------- Exportar para Excel ----------
