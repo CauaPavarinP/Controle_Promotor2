@@ -982,6 +982,20 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
   });
 
+  await t.test('lançamento manual: mês fora da faixa das telas (jan/2020 até o mês atual + 12) responde 400', async () => {
+    const [{ pid }] = await consulta('SELECT id AS pid FROM promotores ORDER BY id LIMIT 1');
+    const [{ lid }] = await consulta('SELECT id AS lid FROM lojas ORDER BY id LIMIT 1');
+    const lancar = (mes) => regis('/api/visitas', { method: 'POST', json: { promotorId: pid, lojaId: lid, mes, visitas: 1, custo: '' } });
+    for (const mes of ['2099-12', '2019-12']) {
+      const r = await lancar(mes);
+      assert.equal(r.status, 400, mes);
+      assert.match(r.dados.erro, /Mês fora do aceito: escolha de jan\/2020 até /);
+    }
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM visitas WHERE mes IN ('2099-12', '2019-12')"))[0].n, 0); // nada gravado
+    assert.equal((await lancar('2020-01')).status, 200); // o primeiro mês aceito continua valendo
+    await consulta("DELETE FROM visitas WHERE mes = '2020-01' AND promotor_id = $1 AND loja_id = $2", [pid, lid]);
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
