@@ -19,13 +19,16 @@ function ultimoMesAceito(agora = new Date()) {
 }
 const rotulo = (mes) => `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][Number(mes.slice(5)) - 1]}/${mes.slice(0, 4)}`;
 
+// O mês está dentro da faixa que as telas mostram? Usado pelo período dos filtros e pelo lançamento manual.
+// Um mês fora dela (ex.: 2099-12) até seria gravado, mas nenhuma tela o mostraria: o dado ficaria "invisível".
+const mesNaFaixa = (mes) => mes >= PRIMEIRO_MES && mes <= ultimoMesAceito();
+
 function lerPeriodo(query) {
   const { de, ate } = query;
   if (!mesValido(de) || !mesValido(ate)) throw new ErroDeValidacao('Informe o período (mês inicial e final).');
   if (de > ate) throw new ErroDeValidacao('O mês inicial não pode ser depois do mês final.');
-  const ultimo = ultimoMesAceito();
-  if (de < PRIMEIRO_MES || ate > ultimo) {
-    throw new ErroDeValidacao(`Período fora do aceito: escolha meses de ${rotulo(PRIMEIRO_MES)} até ${rotulo(ultimo)}.`);
+  if (!mesNaFaixa(de) || !mesNaFaixa(ate)) {
+    throw new ErroDeValidacao(`Período fora do aceito: escolha meses de ${rotulo(PRIMEIRO_MES)} até ${rotulo(ultimoMesAceito())}.`);
   }
   return { de, ate };
 }
@@ -477,6 +480,8 @@ const idValido = (valor) => (Number.isInteger(valor) && valor > 0 && valor <= 21
 // Lançamento manual de um atendimento (promotor + loja + mês). Se já existir, substitui.
 async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   if (!mesValido(mes)) throw new ErroDeValidacao('Informe o mês.');
+  // Mesma faixa das telas (ver lerPeriodo): senão o atendimento ficaria gravado sem aparecer em lugar nenhum.
+  if (!mesNaFaixa(mes)) throw new ErroDeValidacao(`Mês fora do aceito: escolha de ${rotulo(PRIMEIRO_MES)} até ${rotulo(ultimoMesAceito())}.`);
   const qtd = Number(visitas);
   if (!Number.isInteger(qtd) || qtd < 0 || qtd > 999) throw new ErroDeValidacao('Quantidade de visitas inválida.');
   const valor = custo === '' || custo === null || custo === undefined ? null : dinheiro(custo, 'custo');

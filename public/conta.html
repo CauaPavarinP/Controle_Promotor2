@@ -17,8 +17,8 @@
         <form id="form">
           <div class="grade">
             <div class="campo inteiro"><label for="atual">Senha atual</label><input id="atual" type="password" required autocomplete="current-password"></div>
-            <div class="campo"><label for="nova">Senha nova (mínimo 8 caracteres)</label><input id="nova" type="password" required minlength="8" autocomplete="new-password"></div>
-            <div class="campo"><label for="repetir">Repita a senha nova</label><input id="repetir" type="password" required minlength="8" autocomplete="new-password"></div>
+            <div class="campo"><label for="nova">Senha nova (mínimo 8 caracteres)</label><input id="nova" type="password" required minlength="8" maxlength="72" autocomplete="new-password"></div>
+            <div class="campo"><label for="repetir">Repita a senha nova</label><input id="repetir" type="password" required minlength="8" maxlength="72" autocomplete="new-password"></div>
           </div>
           <button type="submit">Trocar senha</button>
         </form>

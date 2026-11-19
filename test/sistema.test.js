@@ -963,6 +963,70 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.ok(lista.length >= 3 && lista.every((r) => /Auditado/.test(r.alvo)));
   });
 
+  await t.test('sessão: desativar o usuário invalida os cookies antigos, mesmo se ele for reativado depois', async () => {
+    await suporte('/api/usuarios', { method: 'POST', json: { login: 'reativado', nome: 'Teste Reativado', senha: 'senha-reativado', perfil: 'usuario' } });
+    const x = sessao();
+    assert.equal((await x('/api/login', { method: 'POST', json: { login: 'reativado', senha: 'senha-reativado' } })).status, 200);
+    const cookieAntigo = x.cookie();
+    const [u] = (await suporte('/api/usuarios')).dados.filter((v) => v.login === 'reativado');
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { ativo: false } });
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { ativo: true } });
+    // O cookie de ANTES da desativação não pode voltar a valer com a reativação.
+    assert.equal((await fetch(`${base}/api/eu`, { headers: { cookie: cookieAntigo } })).status, 401);
+    // Entrar de novo funciona normalmente.
+    assert.equal((await x('/api/login', { method: 'POST', json: { login: 'reativado', senha: 'senha-reativado' } })).status, 200);
+    assert.equal((await x('/api/eu')).status, 200);
+    // Editar só o nome (sem desativar) não derruba ninguém.
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { nome: 'Teste Reativado 2' } });
+    assert.equal((await x('/api/eu')).status, 200);
+    await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
+  });
+
+  await t.test('lançamento manual: mês fora da faixa das telas (jan/2020 até o mês atual + 12) responde 400', async () => {
+    const [{ pid }] = await consulta('SELECT id AS pid FROM promotores ORDER BY id LIMIT 1');
+    const [{ lid }] = await consulta('SELECT id AS lid FROM lojas ORDER BY id LIMIT 1');
+    const lancar = (mes) => regis('/api/visitas', { method: 'POST', json: { promotorId: pid, lojaId: lid, mes, visitas: 1, custo: '' } });
+    for (const mes of ['2099-12', '2019-12']) {
+      const r = await lancar(mes);
+      assert.equal(r.status, 400, mes);
+      assert.match(r.dados.erro, /Mês fora do aceito: escolha de jan\/2020 até /);
+    }
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM visitas WHERE mes IN ('2099-12', '2019-12')"))[0].n, 0); // nada gravado
+    assert.equal((await lancar('2020-01')).status, 200); // o primeiro mês aceito continua valendo
+    await consulta("DELETE FROM visitas WHERE mes = '2020-01' AND promotor_id = $1 AND loja_id = $2", [pid, lid]);
+  });
+
+  await t.test('senha com mais de 72 bytes é recusada (o bcrypt ignoraria o resto) ao criar, editar e trocar', async () => {
+    const longa = 'a'.repeat(72) + 'X'; // 73 bytes
+    const acentuada = 'é'.repeat(37); // 37 caracteres, mas 74 bytes (cada "é" ocupa 2 bytes em UTF-8)
+    const msg = /no máximo 72 bytes/;
+    for (const senha of [longa, acentuada]) {
+      const r = await suporte('/api/usuarios', { method: 'POST', json: { login: 'senhalonga', nome: 'Senha Longa', senha, perfil: 'usuario' } });
+      assert.deepEqual([r.status, msg.test(r.dados.erro)], [400, true]);
+    }
+    // 72 bytes exatos: aceita, e a pessoa entra.
+    const limite = 'b'.repeat(72);
+    assert.equal((await suporte('/api/usuarios', { method: 'POST', json: { login: 'senhalonga', nome: 'Senha Longa', senha: limite, perfil: 'usuario' } })).status, 200);
+    const x = sessao();
+    assert.equal((await x('/api/login', { method: 'POST', json: { login: 'senhalonga', senha: limite } })).status, 200);
+    // Editar (suporte) e trocar a própria senha também recusam.
+    const [u] = (await suporte('/api/usuarios')).dados.filter((v) => v.login === 'senhalonga');
+    assert.equal((await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { senha: longa } })).status, 400);
+    assert.equal((await x('/api/conta/senha', { method: 'POST', json: { senhaAtual: limite, senhaNova: acentuada } })).status, 400);
+    assert.equal((await x('/api/eu')).status, 200); // nada mudou: continua logado com a senha antiga
+    await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
+  });
+
+  await t.test('auditoria: registros com mais de 24 meses são apagados ao iniciar o sistema', async () => {
+    await consulta(`INSERT INTO auditoria (criado_em, usuario, acao, alvo) VALUES
+      (now() - interval '25 months', 'teste', 'teste.limpeza', 'antigo'),
+      (now() - interval '23 months', 'teste', 'teste.limpeza', 'recente')`);
+    await iniciarBanco(); // é o que acontece a cada vez que o servidor liga (deploy, ou o Render "acordando")
+    const alvos = (await consulta("SELECT alvo FROM auditoria WHERE acao = 'teste.limpeza' ORDER BY alvo")).map((r) => r.alvo);
+    assert.deepEqual(alvos, ['recente']);
+    await consulta("DELETE FROM auditoria WHERE acao = 'teste.limpeza'");
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

@@ -4,6 +4,10 @@ const bcrypt = require('bcryptjs');
 const { consulta } = require('./db');
 
 const SENHA_MINIMA = 8;
+// O bcrypt só usa os primeiros 72 BYTES da senha e ignora o resto em silêncio: "72 letras a + X" e
+// "72 letras a + Y" virariam a mesma senha. Por isso recusamos senhas maiores. A conta é em bytes (UTF-8),
+// e não em letras, porque cada letra acentuada ("é", "ç") ocupa 2 bytes.
+const SENHA_MAXIMA_BYTES = 72;
 const PERFIS = ['suporte', 'usuario'];
 
 class ErroDeValidacao extends Error {}
@@ -19,6 +23,11 @@ class ErroDeAcesso extends ErroDeValidacao {
 function validarSenha(senha) {
   if (typeof senha !== 'string' || senha.length < SENHA_MINIMA) {
     throw new ErroDeValidacao(`A senha precisa ter pelo menos ${SENHA_MINIMA} caracteres.`);
+  }
+  // Só ao CRIAR ou TROCAR a senha (é aqui que ela é validada). O login não passa por esta função, então
+  // senhas já gravadas continuam entrando como antes.
+  if (Buffer.byteLength(senha, 'utf8') > SENHA_MAXIMA_BYTES) {
+    throw new ErroDeValidacao(`A senha pode ter no máximo ${SENHA_MAXIMA_BYTES} bytes (cerca de 72 letras sem acento; letras acentuadas contam 2). Use uma senha menor.`);
   }
 }
 
@@ -164,7 +173,12 @@ async function atualizarUsuario(id, { nome, perfil, ativo, senha }, quemPediu) {
     if (id === quemPediu.id) throw new ErroDeValidacao('Você não pode tirar o seu próprio acesso de suporte.');
     await garantirOutroSuporte(id);
   }
-  await consulta('UPDATE usuarios SET nome = $1, perfil = $2, ativo = $3 WHERE id = $4', [novo.nome, novo.perfil, novo.ativo, id]);
+  // Desativar também aumenta a versão da sessão. Sem isso, "desativar" só barrava o acesso ENQUANTO o usuário
+  // estivesse inativo: se o suporte o reativasse em menos de 12 h, um cookie de antes da desativação (até um
+  // copiado ou roubado) voltava a valer. Com a versão nova, quem foi desativado precisa entrar de novo.
+  const desativou = atual.ativo && !novo.ativo;
+  await consulta(`UPDATE usuarios SET nome = $1, perfil = $2, ativo = $3, sessao_versao = sessao_versao + CASE WHEN $5 THEN 1 ELSE 0 END
+    WHERE id = $4`, [novo.nome, novo.perfil, novo.ativo, id, desativou]);
   if (trocaSenha) {
     // Senha nova definida pelo suporte: derruba as sessões abertas daquela pessoa.
     await consulta('UPDATE usuarios SET senha_hash = $1, sessao_versao = sessao_versao + 1 WHERE id = $2', [await bcrypt.hash(senha, 10), id]);
