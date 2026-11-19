@@ -646,6 +646,11 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.deepEqual(criado.ligados.map((l) => [l.nome, l.atendimentos]), [['Zé Pendente da Silva', 1]]);
     assert.equal(await visitasDe(criado.id), 1);
     assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro', 'Maria Sem Codigo']);
+    // Nome, agência e código IGUAIS aos do pendente: não é "duplicado", é a mesma pessoa (liga em vez de recusar).
+    await gravar({ tipo: 'visitas', arquivo: 'pend2.xlsx', itens: [clt('Igual Igual', '9', 'Loja P4')] });
+    const igual = await regis('/api/promotores', { method: 'POST', json: { nome: 'Igual Igual', tipo: 'CLT', codigo: '9', agencia: 'Ag Pend' } });
+    assert.equal(igual.status, 200, JSON.stringify(igual.dados));
+    assert.deepEqual(igual.dados.ligados.map((l) => l.nome), ['Igual Igual']);
 
     // a) Editar e salvar o próprio pendente pela tela: deixa de ser pendente e passa a poder receber ligações.
     const maria = (await pend()).pendentes.find((x) => x.nome === 'Maria Sem Codigo');

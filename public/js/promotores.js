@@ -66,10 +66,10 @@ async function carregarPendentes() {
     if (!confirm(`${texto}\n\nExcluir esses promotores pendentes? Quem tem atendimento ou já foi cadastrado não é tocado. Não dá para desfazer.`)) return;
     try {
       const r = await api('/api/promotores/nao-identificados/limpar', { method: 'POST' });
-      mostrarAviso(document.getElementById('aviso'), `${r.apagados} promotor(es) pendente(s) sem atendimento excluído(s).`, 'ok');
       const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu);
       await carregarPendentes();
-      carregar();
+      await carregar(); // recarregar a lista limpa o aviso: a mensagem vem depois
+      mostrarAviso(document.getElementById('aviso'), `${r.apagados} promotor(es) pendente(s) sem atendimento excluído(s).`, 'ok');
     } catch (erro) {
       mostrarAviso(document.getElementById('aviso'), erro.message);
     }
@@ -81,10 +81,10 @@ async function carregarPendentes() {
     if (!destino.value) return mostrarAviso(document.getElementById('aviso'), 'Escolha o promotor do cadastro antes de ligar.');
     try {
       const r = await api(`/api/promotores/${botao.dataset.ligar}/ligar`, { method: 'POST', json: { destinoId: Number(destino.value) } });
-      mostrarAviso(document.getElementById('aviso'), `Ligado a ${r.promotor}: ${r.atendimentos} atendimento(s) passaram para ele. As próximas importações já usam esta ligação.`, 'ok');
       const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
       await carregarPendentes();
-      carregar();
+      await carregar(); // recarregar a lista limpa o aviso: a mensagem vem depois
+      mostrarAviso(document.getElementById('aviso'), `Ligado a ${r.promotor}: ${r.atendimentos} atendimento(s) passaram para ele. As próximas importações já usam esta ligação.`, 'ok');
     } catch (erro) {
       mostrarAviso(document.getElementById('aviso'), erro.message);
     }

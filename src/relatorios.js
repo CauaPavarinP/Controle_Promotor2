@@ -2,7 +2,7 @@
 // passa pelo "analisar" e agrupa as linhas de atendimento do jeito que a tela precisa.
 const config = require('./config');
 const { consulta, transacao } = require('./db');
-const { ligarPendentesDe } = require('./ligacaoPromotor');
+const { ligarPendentesDe, ligarDentro } = require('./ligacaoPromotor');
 const { problemaNaData } = require('./datas');
 const calc = require('./calculo');
 const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor, codigoNormal } = require('./planilha');
@@ -436,12 +436,27 @@ const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'cargo', 'empresa
 async function salvarPromotor(id, dados) {
   const p = validarPromotor(dados);
   return transacao(async (rodar) => {
-    // Mesmo nome, agência e código (código sem zeros à esquerda: "06" = "6").
-    const mesmos = await rodar('SELECT id, codigo FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND id <> $3',
-      [p.nome, p.agencia, id || 0]);
+    // Mesmo nome, agência e código (código sem zeros à esquerda: "06" = "6"). Pendente ainda não cadastrado não
+    // conta como duplicado: ele é a mesma pessoa e vai ser ligado a este promotor logo abaixo.
+    const mesmos = await rodar(`SELECT id, codigo FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND id <> $3
+      AND (pendente = '' OR cadastrado)`, [p.nome, p.agencia, id || 0]);
     const repetido = mesmos.find((m) => codigoNormal(m.codigo) === codigoNormal(p.codigo));
     if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
     const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
+    // Pendente IDÊNTICO (mesmo nome, agência e código, a identidade única do banco): é a mesma pessoa.
+    // Novo cadastro: aproveita o próprio pendente (vira cadastrado com os dados da tela e mantém os atendimentos).
+    // Edição: liga o pendente a este promotor antes de gravar (senão o banco recusaria por ser repetido).
+    const [identico] = await rodar(`SELECT * FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3
+      AND id <> $4 AND pendente <> '' AND NOT cadastrado FOR UPDATE`, [p.nome, p.agencia, p.codigo, id || 0]);
+    const aproveitados = [];
+    if (identico && !id) {
+      id = identico.id;
+      const [{ n }] = await rodar('SELECT count(*)::int AS n FROM visitas WHERE promotor_id = $1', [id]);
+      aproveitados.push({ nome: identico.nome, agencia: identico.agencia, atendimentos: n });
+    } else if (identico) {
+      const [destino] = await rodar('SELECT * FROM promotores WHERE id = $1 FOR UPDATE', [id]);
+      if (destino) aproveitados.push({ nome: identico.nome, agencia: identico.agencia, atendimentos: await ligarDentro(rodar, identico, destino) });
+    }
     let salvo = id;
     if (id) {
       const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
@@ -452,7 +467,7 @@ async function salvarPromotor(id, dados) {
       const [criado] = await rodar(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}, cadastrado, pendente) VALUES (${marcadores}, TRUE, '') RETURNING id`, valores);
       salvo = criado.id;
     }
-    return { id: salvo, ligados: await ligarPendentesDe(rodar, salvo) };
+    return { id: salvo, ligados: [...aproveitados, ...await ligarPendentesDe(rodar, salvo)] };
   });
 }
 
