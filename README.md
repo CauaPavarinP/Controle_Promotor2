@@ -136,7 +136,7 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **Compressão (gzip)** em todas as respostas: as listas grandes chegam cerca de 10 vezes menores (Lojas por UF, 12 meses: 383 KB → 28 KB).
 - **CSS e JS com versão no endereço** (`/js/comum.js?v=<resumo do conteúdo>`): o navegador guarda o arquivo por até 1 ano e não pergunta de novo a cada tela. Quando o arquivo muda numa publicação, a versão muda e o navegador baixa o novo. As telas (HTML) continuam sem cache.
 - As listas dos filtros (`/api/opcoes`) são pedidas junto com o usuário logado (`/api/eu`), e não depois.
-- **Melhoria futura (segurança):** o `npm audit` aponta um alerta moderado na biblioteca `uuid`, usada por dentro do `exceljs` (exportações para Excel). Não veio da mudança de velocidade: já existia. A correção sugerida pelo npm (`npm audit fix --force`) troca o `exceljs` por uma versão antiga e incompatível, o que pode quebrar as exportações. Corrigir com calma: ver se uma versão nova do `exceljs` já usa um `uuid` corrigido, atualizar e testar todas as exportações.
+- **Melhoria futura (segurança):** alerta moderado do `npm audit` na biblioteca `uuid` (dentro do `exceljs`). Diagnóstico e plano de correção em "Plano de Melhorias Técnicas e Segurança", item 4.
 - **Plano gratuito do Render:** o servidor desliga depois de um tempo sem uso, e a primeira visita seguinte espera ele ligar de novo. Isso só some num plano pago.
 
 ## Segurança
@@ -267,3 +267,209 @@ Se preferir começar o banco novo vazio, pule os passos 1 e 3: ao iniciar, o sis
 O arquivo `render.yaml` cria o serviço web e o banco PostgreSQL juntos (Render → New → Blueprint). No painel, preencha `ADMIN_LOGIN`, `ADMIN_NOME` e `ADMIN_SENHA`.
 
 Para migrar depois para outro banco PostgreSQL, basta trocar o `DATABASE_URL`. Os dados podem ser levados com `pg_dump` e `pg_restore`.
+
+## Plano de Melhorias Técnicas e Segurança
+
+Levantamento feito lendo o código da branch principal (commit `8d27c0e`, 19/11/2026). Em cada ponto:
+- **Já está certo**: o que foi conferido no código e não precisa mexer.
+- **Falta**: o que vale melhorar.
+- **Próximo passo**: o que fazer.
+
+Nenhuma regra de negócio foi alterada nesta revisão. Toda mudança abaixo segue o fluxo de sempre: branch nova, PR e teste antes do merge. Mudança de tabela vira migração, mostrada antes de aplicar.
+
+### Prioridades
+
+| # | Melhoria | Prioridade | Esforço |
+|---|----------|------------|---------|
+| 2.1 | Sessão por inatividade e cookie que some ao fechar o navegador | Alta | Pequeno |
+| 5.1 | Rodar os testes com banco automaticamente em todo PR (hoje são pulados sem aviso) | Alta | Pequeno |
+| 1.1 | Decidir quais ações destrutivas ficam só para o suporte | Alta | Pequeno (decisão do negócio) |
+| 1.2 | Registro de quem fez o quê (auditoria) | Média | Médio |
+| 4 | Corrigir o alerta do `uuid` com `overrides` | Média | Pequeno |
+| 2.2–2.4 | Limpar a memória mesmo se o "Sair" falhar, validade da memória, derrubar sessões ao trocar a senha | Média | Pequeno/Médio |
+| 3 | Modularizar o frontend (módulos ES, `html` que escapa sozinho, estado dos filtros) | Média | Médio, aos poucos |
+| 5.2 | Testes novos dos fluxos críticos | Média | Médio |
+| 6 | Migrações versionadas e divisão dos arquivos grandes | Baixa | Médio |
+
+### 1. Autorização e validação no servidor (`src/app.js`, `src/auth.js`)
+
+**Já está certo (conferido):**
+- **Login obrigatório:** toda rota `/api`, menos login e logout, passa por `exigirLogin`. Ele confere o usuário **no banco a cada chamada**: usuário desativado perde o acesso na hora.
+- **Rotas de usuários:** as 4 rotas de `/api/usuarios` têm `exigirSuporte` **no servidor** (403 para o perfil usuario; há teste). A tela de Usuários também é bloqueada no servidor.
+- **Suporte sempre existe:** ninguém tira o próprio acesso de suporte, e o último suporte ativo não pode ser removido.
+- **Endereços validados:**
+  - todo `:id` passa por `api.param('id')` (inteiro de 1 a 2.147.483.647; senão, 400);
+  - `/clientes/:cnpj` aceita só 11 a 14 dígitos;
+  - o período passa por `lerPeriodo` (2020-01 até o mês atual + 12).
+- **Corpos validados nas funções:** `validarPromotor`, `salvarVisita`, `criarSupervisor`/`editarSupervisor`, `criarUsuario`/`atualizarUsuario`, e a importação (`MAX_ITENS`, tipo e faixa de cada valor, mês, CNPJ).
+- **SQL sempre com parâmetros** (`$1`, `$2`…), nunca texto montado com dado do usuário.
+- **IDOR (acessar dado "de outra pessoa" trocando o id):** não se aplica aos dados do negócio. Lojas, promotores, atendimentos e faturamento são da empresa e vistos por todos os usuários logados; não existe "dono" de registro. A única área com dono são os usuários, e ela é só do suporte.
+
+**Falta:**
+1. **Ações destrutivas abertas ao perfil usuario.**
+   - Por decisão do negócio, o perfil `usuario` faz tudo, menos administrar usuários.
+   - Isso inclui: excluir promotor (leva os atendimentos), excluir atendimento, desfazer importação, excluir os pendentes sem atendimento, juntar supervisores e ligar pendentes.
+   - **Próximo passo:** decidir com o negócio se alguma delas fica só para o suporte. Se sim, basta pôr `auth.exigirSuporte` na rota (o mesmo filtro dos usuários) e esconder o botão na tela.
+2. **Sem registro de quem fez o quê.**
+   - Só a importação guarda o nome de quem importou.
+   - Excluir, ligar, juntar e limpar não deixam rastro.
+   - **Próximo passo:** criar a tabela `auditoria` (quando, usuario_id, ação, alvo, detalhes em JSON), gravada pelas rotas de escrita. É uma migração nova, mostrada antes.
+3. **SQL direto nas rotas.**
+   - `DELETE /api/promotores/:id` e `DELETE /api/visitas/:id` fazem o SQL no próprio `app.js`.
+   - O de visitas responde `ok` mesmo quando o id não existe (as outras rotas devolvem 404).
+   - **Próximo passo:** mover para `src/relatorios.js` e devolver 404, como nas outras rotas.
+4. **Bloqueio de tentativas de login guardado na memória do servidor.**
+   - Ele zera a cada deploy ou reinício e não funciona com mais de uma instância.
+   - Hoje é aceitável (1 instância).
+   - **Próximo passo:** só guardar no banco se o sistema passar a ter mais de uma instância.
+5. **CSRF (site falso que dispara uma ação usando o login de quem está logado).**
+   - Hoje a proteção é o cookie `SameSite=Lax` e o fato de a API só aceitar JSON ou `octet-stream`, o que obriga o navegador a pedir permissão antes de outro site enviar.
+   - **Próximo passo (reforço barato):** recusar POST/PUT/DELETE cujo cabeçalho `Origin` não seja o próprio endereço do sistema.
+
+### 2. Sessão e memória no navegador (`public/js/comum.js`)
+
+**Já está certo (conferido):**
+- **Cookie de sessão:** o `sessao` é `HttpOnly` e `SameSite=Lax`, é `Secure` em produção, e começa uma sessão nova a cada login.
+- **Sem cache:** a API responde com `Cache-Control: no-store`, as telas também não ficam no cache, e há HSTS.
+- **Memória das listas:**
+  - fica no `sessionStorage`, que some ao fechar a aba e não passa para outras abas;
+  - é apagada ao **sair**, ao **abrir a tela de login** e depois de cada importação ou alteração;
+  - o apagamento na tela de login também cobre a sessão expirada, porque o 401 manda para o login;
+  - respostas acima de 1,5 MB não são guardadas;
+  - a ficha do promotor (com salário) não é guardada.
+- **`localStorage`:** guarda só preferências (período escolhido, "ocultar sem custo").
+
+**Falta (pensando em computador compartilhado):**
+1. **A sessão dura 12 horas fixas e sobrevive a fechar o navegador.**
+   - O `maxAge` cria um cookie que fica salvo no computador.
+   - Quem usar o mesmo computador depois, dentro desse prazo, entra direto.
+   - **Próximo passo:**
+     - sessão por **inatividade** (ex.: 2 horas sem uso), renovada a cada chamada;
+     - cookie **sem** `maxAge`, que some ao fechar o navegador;
+     - o limite de 12 horas passa a ser conferido no servidor, por uma data gravada na sessão.
+2. **O "Sair" só limpa a memória depois que o servidor responde.**
+   - Ele chama `/api/logout` e só então roda `esquecerTudo()`.
+   - Se a chamada falhar (sem rede), a memória fica.
+   - **Próximo passo:** limpar primeiro, ou num `finally`.
+3. **A memória não tem validade.**
+   - Enquanto a aba estiver aberta, ficam guardados os últimos dados de **Resumo, Faturamento, Promotores, Lojas por UF e Agências**, com custos e faturamento.
+   - Os dados sempre são conferidos com o servidor ao abrir a tela, mas qualquer um consegue lê-los pelo F12 (DevTools).
+   - **Próximo passo:**
+     - guardar junto a hora e descartar depois de alguns minutos;
+     - avaliar não guardar Lojas por UF e Agências, que mostram o custo por promotor.
+   - Obs.: a seção "Por que as telas não piscam" cita só Resumo, Faturamento e Promotores. No código, Lojas por UF e Agências também usam `apiComMemoria`.
+4. **Sair ou trocar a senha não derruba cópias do cookie.**
+   - O `cookie-session` guarda a sessão no próprio cookie, então sair não invalida uma cópia dele.
+   - Trocar a senha também não derruba sessões abertas em outros computadores.
+   - Desativar o usuário derruba, porque é conferido no banco.
+   - **Próximo passo:**
+     - criar a coluna `sessao_versao` em `usuarios` (migração nova, mostrada antes);
+     - gravar esse número na sessão e conferir em `usuarioDaSessao`;
+     - aumentar o número ao trocar a senha ou ao pedir "sair de todos os lugares".
+
+### 3. Manutenção do frontend (`public/`)
+
+**Situação atual:**
+- 12 telas e cerca de 2.500 linhas em `public/js`, em JavaScript puro.
+- As funções de `comum.js` são **globais**, usadas por todas as telas, e dependem da ordem dos `<script>`.
+- Há 49 usos de `innerHTML`.
+- O estado dos filtros fica em três lugares: nos campos da tela, no `sessionStorage` (`filtros`) e no `localStorage` (período).
+
+**Riscos:**
+- **XSS por esquecimento:**
+  - cada `innerHTML` depende de lembrar de usar `esc()`;
+  - a CSP atual (`default-src 'self'`) bloqueia script inline e diminui o estrago;
+  - mesmo assim, um texto de planilha sem `esc()` quebraria a tela.
+- **Nome trocado quebra em silêncio:** renomear uma função de `comum.js` quebra outras telas sem nenhum aviso. Não há verificação antes de publicar.
+- **Filtros apagados junto com a memória:**
+  - `esquecerTudo()` usa `sessionStorage.clear()`;
+  - por isso, ele também apaga os filtros escolhidos depois de importar ou salvar um promotor;
+  - **confirmar com o negócio** se esse comportamento atual é o desejado.
+- **Telas grandes:** `supervisores.js`, `importar.js` e `planilha-comum.js` (530 linhas) misturam busca, regra de exibição e desenho. Isso facilita regressões.
+
+**Padrões sugeridos** (sem framework e sem etapa de build; um por PR):
+1. **Módulos ES** (`<script type="module">`, `import`/`export`): acabam com as globais e funcionam com a CSP atual.
+2. **Template ``html`...` `` que escapa tudo sozinho**, no lugar de `innerHTML` + `esc()` manual.
+3. **Um módulo de estado** (`estado.js`):
+   - `lerFiltros`/`salvarFiltros`, com chaves de prefixo fixo;
+   - `esquecerTudo()` passa a apagar só `memoria:*`.
+4. **Cada tela separada em três partes:**
+   - `carregar`: chama a API;
+   - `montar`: transforma os dados no que vai aparecer; pode ser testado no Node;
+   - `desenhar`: mexe no DOM.
+5. **Verificação antes de publicar:** `// @ts-check` com JSDoc e um ESLint simples (`no-undef`, `no-unused-vars`), para pegar nome errado antes do deploy.
+6. **Framework leve** (ex.: Preact ou Alpine): só se as telas continuarem crescendo. Hoje não é necessário.
+
+### 4. Dependência `uuid` (alerta moderado do `npm audit`)
+
+**Conferido:**
+- O `npm audit` mostra 2 alertas moderados, os dois da mesma causa:
+  - `uuid@8.3.2` (GHSA-w5hq-g745-h8pq): falta checar o limite ao usar as versões v3/v5/v6 **com buffer**;
+  - ele vem pelo `exceljs@4.4.0`.
+- O `exceljs@4.4.0` já é a versão mais nova publicada: não há atualização dele que resolva.
+- O `exceljs` usa **só** `uuid.v4()`, sem buffer (em `cf-rule-ext-xform.js`, formatação condicional). O trecho com problema **não é usado** pelo sistema: o risco prático é baixo.
+- **Não usar** `npm audit fix --force`: ele rebaixa o `exceljs` para a 3.4.0, que é incompatível e quebraria as exportações.
+
+**Plano:**
+1. Numa branch nova, adicionar ao `package.json`:
+   ```json
+   "overrides": { "uuid": "^11.1.1" }
+   ```
+   A 11.1.1 já é corrigida e ainda tem versão CommonJS, que o `exceljs` usa com `require`.
+2. Rodar `npm install`, depois `npm audit` (esperado: 0 alertas) e `npm ls uuid`.
+3. Testar as exportações:
+   - rodar `npm test` com `DATABASE_URL_TESTE`; o teste do sistema baixa as 4 exportações e lê o `.xlsx` de volta;
+   - abrir no Excel um arquivo de cada exportação e os 2 modelos.
+4. Se algo quebrar:
+   - tirar o `overrides`;
+   - anotar aqui que o risco foi aceito (o trecho não é usado) até sair um `exceljs` novo.
+
+### 5. Testes automatizados (`test/`)
+
+**Hoje:**
+- `calculo.test.js`: 14 testes, sem banco.
+- `planilha.test.js`: 20 testes, sem banco.
+- `sistema.test.js`: 29 subtestes, com banco.
+
+Já cobrem:
+- importação que complementa;
+- substituir ou somar;
+- desfazer na ordem certa;
+- divisão do faturamento por CNPJ (nas contas e nas telas);
+- 403 nas rotas de usuários;
+- cookie e cabeçalhos;
+- bloqueio de login;
+- regras de pendentes e de código.
+
+**5.1 Atenção: o teste do sistema é pulado sem aviso.**
+- Sem `DATABASE_URL_TESTE`, o `npm test` "passa" sem ter testado o banco, a API e as permissões.
+- Não há testes automáticos no GitHub (a pasta `.github/` não existe).
+- **Próximo passo:**
+  - um GitHub Actions com PostgreSQL 16 rodando `npm test` em todo PR;
+  - no CI, falhar se a variável faltar.
+
+**5.2 Fluxos que precisam de testes novos:**
+
+| Fluxo | O que testar |
+|-------|--------------|
+| Permissões da API | Uma tabela com **todas** as rotas de escrita × sem login (401), usuario e suporte, que falhe se uma rota nova nascer sem `exigirLogin` ou sem `exigirSuporte` quando precisar |
+| Importação | Duas importações ao mesmo tempo da mesma agência e mês; `.xlsx` acima de 25 MB e corpo acima de 50 MB (413); o mesmo promotor repetido na planilha de cadastro |
+| Desfazer | Desfazer depois de **ligar um pendente à mão** (os atendimentos mudaram de promotor); desfazer depois de **excluir um promotor**; desfazer faturamento quando outra empresa tem o mesmo CNPJ e mês |
+| Divisão do faturamento por CNPJ | CNPJ que ganha ou perde loja entre meses do mesmo período; filtros de supervisor e de agência com CNPJ dividido; total das telas = total do ERP com filtros combinados |
+| Exportações | Conferir o **conteúdo** das colunas comparando com a tela, e não só o status 200 |
+| Sessão (depois do item 2) | Expiração por inatividade; "Sair" limpando a memória mesmo sem rede |
+| Telas | Hoje não há nenhum teste de tela. Começar com Playwright e 3 roteiros: login → Resumo; importar um arquivo de exemplo → desfazer; sair → `sessionStorage` vazio |
+
+### 6. Outros pontos de arquitetura
+
+- **Migrações:**
+  - o `src/db.js` roda o bloco `ATUALIZACOES` inteiro a cada início, com `IF NOT EXISTS`;
+  - funciona, mas não registra o que já rodou nem permite desfazer;
+  - **próximo passo:** tabela `migracoes` (nome, aplicada_em) e arquivos numerados numa pasta `migracoes/`.
+- **Arquivos grandes:**
+  - dividir `src/importar.js` (857 linhas) por tipo: faturamento, atendimentos, cadastro e desfazer;
+  - dividir também `src/relatorios.js` (535 linhas);
+  - tirar do `src/app.js` a montagem das exportações, levando para `src/exportacoes.js`.
+- **Este README está desatualizado em dois lugares:**
+  - a tabela "Organização do código" não tem `src/ligacaoPromotor.js` e `src/datas.js`;
+  - a lista de tabelas não tem `clientes_erp`, `faturamento_erp`, `supervisores`, `vinculos_promotor`, `visita_supervisor` e `importacoes_backup`.
