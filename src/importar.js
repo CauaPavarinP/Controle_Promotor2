@@ -851,7 +851,12 @@ async function desfazerImportacao(id, confirmacao = '') {
   });
 }
 
+async function lerImportacao(id) {
+  const [imp] = await consulta('SELECT id, tipo, arquivo, usuario, linhas, meses, criado_em FROM importacoes WHERE id = $1', [id]);
+  return imp || null;
+}
+
 module.exports = {
-  gravarFaturamento, gravarVisitas, gravarPromotores, gravarSupervisor, previaDaImportacao, listarImportacoes, desfazerImportacao,
+  lerImportacao, gravarFaturamento, gravarVisitas, gravarPromotores, gravarSupervisor, previaDaImportacao, listarImportacoes, desfazerImportacao,
   ErroDeImportacao, NaoEncontrado,
 };

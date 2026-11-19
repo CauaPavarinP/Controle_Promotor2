@@ -9,9 +9,10 @@ const config = require('./config');
 const auth = require('./auth');
 const relatorios = require('./relatorios');
 const supervisores = require('./supervisores');
+const auditoria = require('./auditoria');
 const planilha = require('./planilha');
 const {
-  gravarFaturamento, gravarVisitas, gravarPromotores, previaDaImportacao, listarImportacoes, desfazerImportacao, ErroDeImportacao, NaoEncontrado,
+  lerImportacao, gravarFaturamento, gravarVisitas, gravarPromotores, previaDaImportacao, listarImportacoes, desfazerImportacao, ErroDeImportacao, NaoEncontrado,
 } = require('./importar');
 
 const ROTULO_SITUACAO = {
@@ -148,6 +149,13 @@ function criarApp() {
   api.param('id', conferirId);
   api.param('lojaId', conferirId);
 
+  // Auditoria (ver src/auditoria.js). "registrar" grava depois que a ação deu certo; as exclusões gravam
+  // dentro da própria transação (parâmetro "extra" das funções de excluir).
+  const registrar = (req, acao, alvo, detalhes) => auditoria.registrarDepois(req.usuario, acao, alvo, detalhes);
+  const naTransacao = (req, acao, alvo) => (rodar, apagado) => auditoria.registrar(req.usuario, acao, alvo(apagado), apagado, rodar);
+  // Só os números e textos do resultado de uma importação (as listas longas ficam de fora).
+  const resumoDe = (r) => Object.fromEntries(Object.entries(r || {}).filter(([, v]) => !Array.isArray(v)));
+
   api.get('/eu', (req, res) => res.json(req.usuario));
   api.get('/opcoes', async (req, res) => res.json(await relatorios.opcoes()));
   api.get('/lojas', async (req, res) => res.json(await relatorios.listaDeLojas()));
@@ -167,6 +175,7 @@ function criarApp() {
   api.post('/conta/senha', async (req, res) => {
     // Trocar a senha derruba as outras sessões; esta continua, com a versão nova.
     req.session.versao = await auth.trocarPropriaSenha(req.usuario.id, req.body.senhaAtual, req.body.senhaNova);
+    await registrar(req, 'conta.trocar_senha', req.usuario.login, {});
     res.json({ ok: true });
   });
 
@@ -180,28 +189,45 @@ function criarApp() {
   // Promotores que a importação não identificou com certeza, e a ligação feita à mão (fica guardada).
   api.get('/promotores/nao-identificados', async (req, res) => res.json(await supervisores.naoIdentificados()));
   // Apaga os pendentes sem nenhum atendimento (a tela pede confirmação antes).
-  api.post('/promotores/nao-identificados/limpar', async (req, res) => res.json(await supervisores.apagarPendentesSemAtendimento()));
+  api.post('/promotores/nao-identificados/limpar', async (req, res) => {
+    const r = await supervisores.apagarPendentesSemAtendimento();
+    if (r.apagados) await registrar(req, 'pendentes.excluir_sem_atendimento', `${r.apagados} pendente(s)`, r);
+    res.json(r);
+  });
   api.post('/promotores/:id/ligar', async (req, res) => {
-    res.json({ ok: true, ...(await supervisores.ligarPromotor(Number(req.params.id), Number(req.body.destinoId))) });
+    const pendente = await relatorios.lerPromotor(Number(req.params.id));
+    const r = await supervisores.ligarPromotor(Number(req.params.id), Number(req.body.destinoId));
+    await registrar(req, 'pendente.ligar', `${pendente ? pendente.nome : `#${req.params.id}`} → ${r.promotor}`,
+      { pendenteId: Number(req.params.id), pendente: pendente && { nome: pendente.nome, agencia: pendente.agencia, codigo: pendente.codigo }, destinoId: Number(req.body.destinoId), ...r });
+    res.json({ ok: true, ...r });
   });
 
   // ---------- Supervisores ----------
   api.get('/supervisores', async (req, res) => res.json(await relatorios.supervisoresDoPeriodo(req.query)));
   api.post('/supervisores', async (req, res) => {
     await supervisores.criarSupervisor(req.body);
+    await registrar(req, 'supervisor.criar', String(req.body.nome || '').trim(), { nome: req.body.nome, codigo: req.body.codigo || '' });
     res.json({ ok: true });
   });
   api.delete('/supervisores/:id', async (req, res) => {
+    const antes = await supervisores.lerSupervisor(Number(req.params.id));
     if (!(await supervisores.excluirSupervisor(Number(req.params.id)))) return res.status(404).json({ erro: 'Supervisor não encontrado.' });
+    await registrar(req, 'supervisor.excluir', antes ? antes.nome : `#${req.params.id}`, antes || {});
     res.json({ ok: true });
   });
   api.put('/supervisores/:id', async (req, res) => {
+    const antes = await supervisores.lerSupervisor(Number(req.params.id));
     if (!(await supervisores.editarSupervisor(Number(req.params.id), req.body))) return res.status(404).json({ erro: 'Supervisor não encontrado.' });
+    const depois = await supervisores.lerSupervisor(Number(req.params.id));
+    await registrar(req, 'supervisor.editar', depois.nome, auditoria.diferencas(antes, depois));
     res.json({ ok: true });
   });
   // Juntar dois supervisores que são a mesma pessoa (ex.: "Leo" e "Leonardo Silva").
   api.post('/supervisores/:id/juntar', async (req, res) => {
-    res.json({ ok: true, ...(await supervisores.juntarSupervisores(Number(req.params.id), Number(req.body.destinoId))) });
+    const origem = await supervisores.lerSupervisor(Number(req.params.id));
+    const r = await supervisores.juntarSupervisores(Number(req.params.id), Number(req.body.destinoId));
+    await registrar(req, 'supervisor.juntar', `${origem ? origem.nome : `#${req.params.id}`} → ${r.supervisor}`, { origem, destinoId: Number(req.body.destinoId), ...r });
+    res.json({ ok: true, ...r });
   });
 
   api.get('/promotores/:id', async (req, res) => {
@@ -209,27 +235,40 @@ function criarApp() {
     if (!detalhe) return res.status(404).json({ erro: 'Promotor não encontrado.' });
     res.json(detalhe);
   });
-  api.post('/promotores', async (req, res) => res.json(await relatorios.salvarPromotor(null, req.body)));
-  api.put('/promotores/:id', async (req, res) => res.json(await relatorios.salvarPromotor(Number(req.params.id), req.body)));
+  // Salvar promotor: a auditoria guarda só os campos que mudaram (antes -> depois).
+  const salvarPromotor = async (req, id) => {
+    const antes = id ? await relatorios.lerPromotor(id) : null;
+    const salvo = await relatorios.salvarPromotor(id, req.body);
+    const depois = await relatorios.lerPromotor(salvo.id);
+    await registrar(req, id ? 'promotor.editar' : 'promotor.criar', depois ? depois.nome : `#${salvo.id}`,
+      { id: salvo.id, mudou: auditoria.diferencas(antes, depois), ligados: salvo.ligados });
+    return salvo;
+  };
+  api.post('/promotores', async (req, res) => res.json(await salvarPromotor(req, null)));
+  api.put('/promotores/:id', async (req, res) => res.json(await salvarPromotor(req, Number(req.params.id))));
 
   api.post('/visitas', async (req, res) => {
     await relatorios.salvarVisita(req.body);
+    const { promotorId, lojaId, mes, visitas, custo } = req.body;
+    const promotor = await relatorios.lerPromotor(Number(promotorId));
+    await registrar(req, 'atendimento.lancar', `${promotor ? promotor.nome : `#${promotorId}`} – ${mes}`, { promotorId, lojaId, mes, visitas, custo });
     res.json({ ok: true });
   });
   api.delete('/promotores/:id', async (req, res) => {
     // Apaga o promotor e os atendimentos dele (as lojas e o faturamento continuam).
-    const apagado = await relatorios.excluirPromotor(Number(req.params.id));
+    const apagado = await relatorios.excluirPromotor(Number(req.params.id), naTransacao(req, 'promotor.excluir', (p) => p.nome));
     if (!apagado) return res.status(404).json({ erro: 'Promotor não encontrado.' });
     res.json({ ok: true });
   });
   api.delete('/visitas/:id', async (req, res) => {
-    const apagado = await relatorios.excluirVisita(Number(req.params.id));
+    const apagado = await relatorios.excluirVisita(Number(req.params.id), naTransacao(req, 'atendimento.excluir', (v) => `${v.promotor} – ${v.loja} (${v.mes})`));
     if (!apagado) return res.status(404).json({ erro: 'Atendimento não encontrado (talvez já tenha sido excluído).' });
     res.json({ ok: true });
   });
   // Todos os atendimentos do promotor numa loja, no período (?de=AAAA-MM&ate=AAAA-MM), de uma vez só.
   api.delete('/promotores/:id/lojas/:lojaId/visitas', async (req, res) => {
-    const apagado = await relatorios.excluirVisitasDaLoja(Number(req.params.id), Number(req.params.lojaId), req.query);
+    const apagado = await relatorios.excluirVisitasDaLoja(Number(req.params.id), Number(req.params.lojaId), req.query,
+      naTransacao(req, 'atendimentos.excluir_da_loja', (a) => `${a.promotor} – ${a.loja} (${a.de} a ${a.ate})`));
     if (!apagado) return res.status(404).json({ erro: 'Nenhum atendimento deste promotor nesta loja no período (talvez já tenham sido excluídos).' });
     res.json({ ok: true, apagados: apagado.apagados });
   });
@@ -375,7 +414,9 @@ function criarApp() {
     const dados = req.body && typeof req.body === 'object' ? req.body : {}; // corpo que não é JSON chega vazio
     const gravar = { faturamento: gravarFaturamento, visitas: gravarVisitas, promotores: gravarPromotores }[dados.tipo];
     if (!gravar) throw new ErroDeImportacao('Tipo de importação inválido.');
-    res.json(await gravar(dados, req.usuario.nome));
+    const r = await gravar(dados, req.usuario.nome);
+    await registrar(req, 'importacao.gravar', `${dados.tipo}: ${String(dados.arquivo || '').slice(0, 200)}`, resumoDe(r));
+    res.json(r);
   });
 
   // Prévia: antes de gravar, a tela mostra por mês quantos registros são novos e quantos já existem (iguais ou diferentes).
@@ -387,7 +428,10 @@ function criarApp() {
   // Bloqueada se uma importação mais nova já alterou as mesmas linhas; a do cadastro de promotores não pode ser desfeita.
   api.delete('/importacoes/:id', async (req, res) => {
     try {
-      res.json({ ok: true, ...(await desfazerImportacao(Number(req.params.id), String(req.query.confirmacao || ''))) });
+      const importacao = await lerImportacao(Number(req.params.id));
+      const r = await desfazerImportacao(Number(req.params.id), String(req.query.confirmacao || ''));
+      await registrar(req, 'importacao.desfazer', importacao ? `#${importacao.id} ${importacao.tipo}: ${importacao.arquivo}` : `#${req.params.id}`, { importacao, ...r });
+      res.json({ ok: true, ...r });
     } catch (erro) {
       if (erro instanceof NaoEncontrado) return res.status(404).json({ erro: erro.message });
       throw erro;
@@ -398,15 +442,27 @@ function criarApp() {
 
   // ---------- Usuários (só o suporte) ----------
   api.get('/usuarios', auth.exigirSuporte, async (req, res) => res.json(await auth.listarUsuarios()));
-  api.post('/usuarios', auth.exigirSuporte, async (req, res) => res.json(await auth.criarUsuario(req.body)));
+  api.post('/usuarios', auth.exigirSuporte, async (req, res) => {
+    const criado = await auth.criarUsuario(req.body);
+    await registrar(req, 'usuario.criar', criado.login, { nome: criado.nome, perfil: criado.perfil });
+    res.json(criado);
+  });
   api.put('/usuarios/:id', auth.exigirSuporte, async (req, res) => {
+    const antes = await auth.lerUsuario(Number(req.params.id));
     await auth.atualizarUsuario(Number(req.params.id), req.body, req.usuario);
+    const depois = await auth.lerUsuario(Number(req.params.id));
+    const senhaRedefinida = req.body.senha !== undefined && req.body.senha !== ''; // a senha em si nunca é registrada
+    await registrar(req, 'usuario.editar', depois.login, { mudou: auditoria.diferencas(antes, depois), senhaRedefinida });
     res.json({ ok: true });
   });
   api.delete('/usuarios/:id', auth.exigirSuporte, async (req, res) => {
+    const antes = await auth.lerUsuario(Number(req.params.id));
     await auth.excluirUsuario(Number(req.params.id), req.usuario);
+    await registrar(req, 'usuario.excluir', antes ? antes.login : `#${req.params.id}`, antes || {});
     res.json({ ok: true });
   });
+  // Histórico de alterações (auditoria): só o suporte vê. ?busca=texto filtra por usuário, ação ou alvo.
+  api.get('/auditoria', auth.exigirSuporte, async (req, res) => res.json(await auditoria.listar({ busca: req.query.busca, limite: req.query.limite })));
 
   app.use('/api', (req, res) => res.status(404).json({ erro: 'Endereço não encontrado.' }));
 

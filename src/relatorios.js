@@ -493,6 +493,12 @@ async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   );
 }
 
+// Os campos do cadastro de um promotor (para a auditoria comparar o antes e o depois de uma edição).
+async function lerPromotor(id) {
+  const [p] = await consulta(`SELECT ${COLUNAS_PROMOTOR.join(', ')}, cadastrado FROM promotores WHERE id = $1`, [id]);
+  return p || null;
+}
+
 // ---------- Exclusões (cada uma numa transação só: ou apaga tudo, ou nada) ----------
 // Recebem "rodar" opcional, para a auditoria poder ser gravada na MESMA transação (ver app.js).
 
@@ -574,5 +580,5 @@ const nomesDosPromotores = async () => (await consulta('SELECT id, nome, tipo, a
 
 module.exports = {
   resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, detalheDoCliente, lojasPorUf, agencias, supervisoresDoPeriodo,
-  salvarPromotor, salvarVisita, excluirPromotor, excluirVisita, excluirVisitasDaLoja, opcoes, listaDeLojas, nomesDosPromotores,
+  salvarPromotor, salvarVisita, lerPromotor, excluirPromotor, excluirVisita, excluirVisitasDaLoja, opcoes, listaDeLojas, nomesDosPromotores,
 };

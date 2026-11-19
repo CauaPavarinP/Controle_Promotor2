@@ -23,6 +23,21 @@
           </table>
         </div>
       </div>
+      <div class="painel">
+        <h2>Histórico de alterações</h2>
+        <p class="subtitulo">Quem incluiu, alterou ou excluiu o quê (os 300 registros mais recentes). Senhas nunca aparecem aqui.</p>
+        <div class="barra-tabela">
+          <div class="campo largo"><label for="busca-auditoria">Filtrar por pessoa, ação ou alvo</label><input id="busca-auditoria" type="search" autocomplete="off"></div>
+          <span class="contagem" id="contagem-auditoria"></span>
+        </div>
+        <div id="aviso-auditoria" class="aviso" hidden></div>
+        <div class="rolagem">
+          <table>
+            <thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Em quê</th><th>Detalhes</th></tr></thead>
+            <tbody id="linhas-auditoria"></tbody>
+          </table>
+        </div>
+      </div>
       <dialog id="janela">
         <form method="dialog" id="form">
           <h2 id="titulo-janela">Novo usuário</h2>

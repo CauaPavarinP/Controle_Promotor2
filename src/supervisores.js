@@ -107,7 +107,12 @@ async function apagarPendentesSemAtendimento() {
   return { apagados: apagados.length };
 }
 
+async function lerSupervisor(id) {
+  const [s] = await consulta('SELECT id, nome, codigo, cargo, empresa FROM supervisores WHERE id = $1', [id]);
+  return s || null;
+}
+
 module.exports = {
-  apagarPendentesSemAtendimento,
+  apagarPendentesSemAtendimento, lerSupervisor,
   listarCadastro, criarSupervisor, editarSupervisor, excluirSupervisor, juntarSupervisores, naoIdentificados, ligarPromotor,
 };

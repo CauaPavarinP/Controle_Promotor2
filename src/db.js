@@ -226,6 +226,18 @@ CREATE INDEX IF NOT EXISTS visita_supervisor_supervisor ON visita_supervisor (su
 -- antigo daquele usuário (inclusive um copiado ou roubado) deixa de valer.
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sessao_versao INTEGER NOT NULL DEFAULT 0;
 
+-- Auditoria: quem fez o quê (ver src/auditoria.js). "usuario" guarda o nome e o login daquele momento, para o
+-- registro continuar legível mesmo se o usuário for excluído depois (aí usuario_id fica vazio).
+CREATE TABLE IF NOT EXISTS auditoria (
+  id          SERIAL PRIMARY KEY,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  usuario_id  INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+  usuario     TEXT NOT NULL DEFAULT '',
+  acao        TEXT NOT NULL,
+  alvo        TEXT NOT NULL DEFAULT '',
+  detalhes    JSONB NOT NULL DEFAULT '{}'
+);
+
 ALTER TABLE supervisores ADD COLUMN IF NOT EXISTS usuario_id INTEGER UNIQUE REFERENCES usuarios(id) ON DELETE SET NULL;
 
 -- Cópia completa (inclusive salário) dos promotores que a migração moveu para supervisores.

@@ -145,6 +145,7 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - **Telas e API exigem login.** Sem login, as telas redirecionam para `/login` e a API responde 401. A tela e a API de usuários são só do perfil suporte.
 - **Erros inesperados** mostram só uma mensagem genérica com um código (ex.: `MI2K9QZ1`). O detalhe fica no log do servidor, na linha `[erro CÓDIGO]`.
 - **Entradas inválidas** (id que não é número, corpo que não é JSON, dados de importação malformados) recebem 400 antes de chegar ao banco.
+- **Histórico de alterações (auditoria):** cada inclusão, edição ou exclusão feita pela tela fica registrada na tabela `auditoria` (quando, quem, ação, em quê e os detalhes; nas edições, só os campos que mudaram, com o antes e o depois). O suporte vê na tela **Usuários → Histórico de alterações**. Exclusões gravam o registro na mesma transação: se o registro falhar, nada é apagado. Senhas nunca são registradas.
 
 ## Desfazer e excluir
 
@@ -154,6 +155,7 @@ Os dois modelos em branco podem ser baixados na própria tela Importar.
 - Importações feitas **antes da cópia de segurança** (`restauravel = false`) mostram o botão **"Apagar (sem cópia)"**: ele só apaga, o dado anterior não volta, e só funciona se a pessoa digitar **APAGAR**.
 - Lojas, clientes do ERP e promotores cadastrados por uma importação continuam no sistema depois do Desfazer.
 - **Ficha do promotor → Excluir promotor:** apaga o promotor e todos os atendimentos dele.
+- **Ficha do promotor → Excluir (na linha da loja):** apaga, de uma vez só, todos os atendimentos daquele promotor naquela loja no período escolhido. É tudo ou nada: se der erro, nada é apagado.
 - O "Total" de cada linha em *Últimas importações* é o valor daquele arquivo, não o total que está no sistema.
 
 ## Por que as telas não "piscam" ao trocar
@@ -313,11 +315,11 @@ Nenhuma regra de negócio foi alterada nesta revisão. Toda mudança abaixo segu
 2. **Sem registro de quem fez o quê.**
    - Só a importação guarda o nome de quem importou.
    - Excluir, ligar, juntar e limpar não deixam rastro.
-   - **Próximo passo:** criar a tabela `auditoria` (quando, usuario_id, ação, alvo, detalhes em JSON), gravada pelas rotas de escrita. É uma migração nova, mostrada antes.
+   - **Feito:** tabela `auditoria` e tela "Histórico de alterações" (ver a seção Segurança).
 3. **SQL direto nas rotas.**
    - `DELETE /api/promotores/:id` e `DELETE /api/visitas/:id` fazem o SQL no próprio `app.js`.
    - O de visitas responde `ok` mesmo quando o id não existe (as outras rotas devolvem 404).
-   - **Próximo passo:** mover para `src/relatorios.js` e devolver 404, como nas outras rotas.
+   - **Feito:** o SQL foi para `src/relatorios.js`, as rotas devolvem 404 e "Excluir visitas da loja" virou um pedido só, numa transação.
 4. **Bloqueio de tentativas de login guardado na memória do servidor.**
    - Ele zera a cada deploy ou reinício e não funciona com mais de uma instância.
    - Hoje é aceitável (1 instância).
