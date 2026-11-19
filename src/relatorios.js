@@ -5,7 +5,7 @@ const { consulta, transacao } = require('./db');
 const { ligarPendentesDe } = require('./ligacaoPromotor');
 const { problemaNaData } = require('./datas');
 const calc = require('./calculo');
-const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor } = require('./planilha');
+const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor, codigoNormal } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
 
 const { CAMPOS_CUSTO, custoFixo, agenciaDe, somar, agrupar } = calc;
@@ -153,7 +153,7 @@ async function listaDePromotores(query) {
         percentual: s.percentual, situacao: s.situacao,
       };
     })
-    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || p.codigo === texto(query.busca))
+    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || (codigoNormal(p.codigo) !== '' && codigoNormal(p.codigo) === codigoNormal(query.busca)))
     .filter((p) => !query.situacao || p.situacao === query.situacao)
     .filter((p) => !query.ativo || String(p.ativo) === query.ativo)
     // Primeiro quem mais estoura a meta; quem não tem percentual vai para o fim.
@@ -424,10 +424,10 @@ const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'cargo', 'empresa
 async function salvarPromotor(id, dados) {
   const p = validarPromotor(dados);
   return transacao(async (rodar) => {
-    const [repetido] = await rodar(
-      'SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4',
-      [p.nome, p.agencia, p.codigo, id || 0],
-    );
+    // Mesmo nome, agência e código (código sem zeros à esquerda: "06" = "6").
+    const mesmos = await rodar('SELECT id, codigo FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND id <> $3',
+      [p.nome, p.agencia, id || 0]);
+    const repetido = mesmos.find((m) => codigoNormal(m.codigo) === codigoNormal(p.codigo));
     if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
     const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
     let salvo = id;

@@ -1,7 +1,7 @@
 // Conexão com o PostgreSQL e criação das tabelas.
 const { Pool, types } = require('pg');
 const config = require('./config');
-const { chaveDaLoja, separarCargo, normalizar, ehSupervisor } = require('../public/js/planilha-comum');
+const { chaveDaLoja, separarCargo, normalizar, ehSupervisor, codigoNormal } = require('../public/js/planilha-comum');
 const { gravarSupervisor, ligarAtendimentos } = require('./ligacaoSupervisor');
 
 // O PostgreSQL devolve números decimais (numeric) como texto. Aqui pedimos como número.
@@ -270,7 +270,8 @@ async function separarCargosDosNomes() {
   for (const p of candidatos) {
     const { nome, cargo } = separarCargo(p.nome);
     if (!cargo) continue;
-    const [outro] = await consulta('SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4', [nome, p.agencia, p.codigo, p.id]);
+    const mesmos = await consulta('SELECT id, codigo FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND id <> $3', [nome, p.agencia, p.id]);
+    const outro = mesmos.find((m) => codigoNormal(m.codigo) === codigoNormal(p.codigo)); // "06" = "6"
     if (outro) { console.warn(`Cargo não separado do promotor ${p.id} ("${p.nome}"): já existe outro com o nome "${nome}".`); continue; }
     await consulta('UPDATE promotores SET nome = $1, cargo = $2 WHERE id = $3', [nome, cargo, p.id]);
   }

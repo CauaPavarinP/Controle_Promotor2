@@ -139,7 +139,10 @@ const VALOR_PARA_ORDENAR = {
 
 function passaNoFiltro(s) {
   const busca = comparavel(filtroTela.busca);
-  if (busca && !comparavel(`${s.nome} ${s.codigo || ''}`).includes(busca)) return false;
+  // Código comparado sem zeros à esquerda ("06" = "6").
+  const semZeros = (c) => String(c || '').replace(/\s+/g, '').replace(/^0+(?=.)/, '').toLowerCase();
+  const peloCodigo = s.codigo && semZeros(s.codigo) === semZeros(filtroTela.busca);
+  if (busca && !peloCodigo && !comparavel(`${s.nome} ${s.codigo || ''}`).includes(busca)) return false;
   if (filtroTela.agencia && !s.agencias.includes(filtroTela.agencia)) return false;
   if (filtroTela.soPendencias && !pendenciasDe(s).length) return false;
   return true;

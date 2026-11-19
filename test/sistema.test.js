@@ -723,6 +723,14 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.ok((await regis('/api/promotores/nao-identificados')).dados.pendentes.every((x) => x.lojas > 0)); // só ficam os com atendimento
   });
 
+  await t.test('código sem zeros à esquerda: busca e checagem de duplicado ("06" = "6")', async () => {
+    assert.equal((await regis('/api/promotores', { method: 'POST', json: { nome: 'Codigo Zero', tipo: 'CLT', agencia: 'Ag Cod', codigo: '6' } })).status, 200);
+    const dup = await regis('/api/promotores', { method: 'POST', json: { nome: 'codigo zero', tipo: 'CLT', agencia: 'ag cod', codigo: '006' } });
+    assert.deepEqual([dup.status, dup.dados.erro], [400, 'Já existe um promotor com esse nome, agência e código.']);
+    const achados = (await regis('/api/promotores?de=2026-10&ate=2026-10&busca=06')).dados.promotores.map((x) => x.nome);
+    assert.ok(achados.includes('Codigo Zero'));
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
