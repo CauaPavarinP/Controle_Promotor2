@@ -3,6 +3,7 @@
 const config = require('./config');
 const { consulta, transacao } = require('./db');
 const { ligarPendentesDe } = require('./ligacaoPromotor');
+const { problemaNaData } = require('./datas');
 const calc = require('./calculo');
 const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
@@ -394,7 +395,8 @@ function validarPromotor(dados) {
   if (ehSupervisor(dados.cargo)) throw new ErroDeValidacao('Supervisor não é promotor: cadastre na tela Supervisores.');
   if (!['CLT', 'MEI', 'AGENCIA', 'FREELANCER'].includes(dados.tipo)) throw new ErroDeValidacao('Escolha o tipo: CLT, MEI, Agência ou Freelancer.');
   const admissao = String(dados.admissao || '').trim();
-  if (admissao && !/^\d{4}-\d{2}-\d{2}$/.test(admissao)) throw new ErroDeValidacao('Data de admissão inválida.');
+  const problema = problemaNaData(admissao);
+  if (problema) throw new ErroDeValidacao(`Data de admissão inválida (${problema}): ${admissao.slice(0, 20)}.`);
   const limpo = {
     nome,
     tipo: dados.tipo,

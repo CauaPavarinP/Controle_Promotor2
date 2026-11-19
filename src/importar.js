@@ -4,6 +4,7 @@
 const { transacao, consulta } = require('./db');
 const { gravarSupervisor, ligarAtendimentos } = require('./ligacaoSupervisor');
 const { ligarPendentesDe } = require('./ligacaoPromotor');
+const { problemaNaData } = require('./datas');
 const {
   mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, normalizar, ehSupervisor, separarSupervisores, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
 } = require('./planilha');
@@ -342,9 +343,11 @@ function prepararPromotores(dados) {
       regiao: texto(item.regiao, 120),
       telefone: texto(item.telefone, 40),
       observacao: texto(item.observacao, 500),
-      admissao: /^\d{4}-\d{2}-\d{2}$/.test(item.admissao || '') ? item.admissao : '',
+      admissao: texto(item.admissao, 20),
     };
     if (!p.nome) throw new ErroDeImportacao('Há um promotor sem nome nos dados enviados.');
+    const problema = problemaNaData(p.admissao);
+    if (problema) throw new ErroDeImportacao(`Data de admissão inválida para "${p.nome}" (${problema}): ${p.admissao}. Corrija na planilha e importe de novo. Nada foi gravado.`);
     // null = célula vazia (não mexe no valor do sistema); um "0" escrito na planilha vale como zero.
     for (const campo of CAMPOS_DINHEIRO) {
       p[campo] = item[campo] === null || item[campo] === undefined || item[campo] === '' ? null : conferirNumero(item[campo], { minimo: 0, nome: 'Valor do cadastro' });

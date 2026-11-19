@@ -682,6 +682,28 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.deepEqual([ana.salario, ana.cadastrado, ana.pendente, await visitasDe(ana.id)], [1800, true, '', 1]);
   });
 
+  await t.test('data de admissão: só AAAA-MM-DD que existe, ano de 1950 ao ano atual + 1 (tela e importação)', async () => {
+    const anoQueVem = new Date().getFullYear() + 1;
+    const salvar = (admissao) => regis('/api/promotores', { method: 'POST', json: { nome: `Data Teste ${admissao || 'vazia'}`, tipo: 'CLT', admissao } });
+    for (const [data, trecho] of [['2026-02-31', 'essa data não existe'], ['9999-99-99', 'o ano precisa estar entre 1950'], ['1949-12-31', 'o ano precisa estar entre 1950'],
+      [`${anoQueVem + 1}-01-01`, `entre 1950 e ${anoQueVem}`], ['2026-13-01', 'esse mês não existe'], ['01/02/2026', 'formato AAAA-MM-DD'], ['2025-02-29', 'essa data não existe']]) {
+      const r = await salvar(data);
+      assert.equal(r.status, 400, data);
+      assert.match(r.dados.erro, new RegExp(trecho), data);
+    }
+    for (const data of ['', '2024-02-29', `${anoQueVem}-12-31`, '1950-01-01']) assert.equal((await salvar(data)).status, 200, data || 'vazio');
+    // Editar (PUT) também valida.
+    const [p] = await consulta("SELECT id FROM promotores WHERE nome = 'Data Teste vazia'");
+    assert.equal((await regis(`/api/promotores/${p.id}`, { method: 'PUT', json: { nome: 'Data Teste vazia', tipo: 'CLT', admissao: '2026-04-31' } })).status, 400);
+    // Importação do cadastro: data inválida recusa o arquivo inteiro, sem gravar nada.
+    const antes = (await consulta('SELECT count(*)::int AS n FROM promotores'))[0].n;
+    const r = await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'promotores', arquivo: 'datas.xlsx', itens: [
+      { nome: 'Data Boa', tipo: 'CLT', admissao: '2026-01-10', salario: 1 }, { nome: 'Data Ruim', tipo: 'CLT', admissao: '2026-02-30', salario: 1 }] } });
+    assert.equal(r.status, 400);
+    assert.match(r.dados.erro, /Data de admissão inválida para "Data Ruim" \(essa data não existe\): 2026-02-30/);
+    assert.equal((await consulta('SELECT count(*)::int AS n FROM promotores'))[0].n, antes);
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
