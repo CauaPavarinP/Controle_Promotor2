@@ -285,6 +285,14 @@ async function carregarPromotores(rodar) {
     return (cod && lista.find((p) => codigoNormal(p.codigo) === cod && primeiroNome(p.nome) === primeiro)) || null;
   };
 
+  // Regra: código diferente é pessoa diferente. Se os DOIS têm código e os códigos não batem (sem zeros à esquerda),
+  // o nome igual não basta para juntar. Se um dos dois não tem código, o nome continua valendo.
+  const codigoCompativel = (p, codigo) => {
+    const meu = codigoNormal(codigo);
+    const dele = codigoNormal(p.codigo);
+    return !meu || !dele || meu === dele;
+  };
+
   const achar = ({ nome, agencia = '', empresa = '', codigo = '' }) => {
     const peloCodigo = porCodigo({ nome, codigo });
     if (peloCodigo) return { promotor: peloCodigo };
@@ -294,11 +302,14 @@ async function carregarPromotores(rodar) {
       ? lista.filter((p) => codigoNormal(p.codigo) === cod && [p.agencia, p.empresa].some((a) => minhas.includes(normalizar(a))))
       : [];
     if (daAgencia.length === 1) return { promotor: daAgencia[0] };
-    const mesmoNome = lista.filter((p) => normalizar(p.nome) === normalizar(nome));
+    const todosComNome = lista.filter((p) => normalizar(p.nome) === normalizar(nome));
+    const mesmoNome = todosComNome.filter((p) => codigoCompativel(p, codigo));
     const cadastrados = mesmoNome.filter((p) => p.cadastrado || !p.pendente);
     const escolhidos = cadastrados.length ? cadastrados : mesmoNome;
     if (escolhidos.length === 1) return { promotor: escolhidos[0] };
-    return { promotor: null, ambiguo: escolhidos.length > 1 };
+    // Mesmo nome, mas com outro código: é outra pessoa (vai ser criada). Devolve quem é, para a confirmação avisar.
+    const comOutroCodigo = escolhidos.length ? [] : todosComNome;
+    return { promotor: null, ambiguo: escolhidos.length > 1, comOutroCodigo };
   };
 
   const identificar = ({ nome, agencia = '', codigo = '' }) => {
@@ -308,14 +319,14 @@ async function carregarPromotores(rodar) {
     const vinculo = vinculos.get(`${normalizar(nome)}|${ag}`);
     if (vinculo && porId.has(vinculo)) return { promotor: porId.get(vinculo) };
     // O próprio promotor pendente de uma importação anterior também conta: assim não duplica a cada importação.
-    const completo = lista.find((p) => normalizar(p.nome) === normalizar(nome) && normalizar(p.agencia) === ag);
+    const completo = lista.find((p) => normalizar(p.nome) === normalizar(nome) && normalizar(p.agencia) === ag && codigoCompativel(p, codigo));
     if (completo) return { promotor: completo };
     // Nome completo igual ao de UM ÚNICO promotor do cadastro (ex.: CLT cuja agência no arquivo é diferente da
     // empresa do cadastro). Com mais de um, segue para as regras abaixo.
-    const doCadastro = lista.filter((p) => p.cadastrado && normalizar(p.nome) === normalizar(nome));
+    const doCadastro = lista.filter((p) => p.cadastrado && normalizar(p.nome) === normalizar(nome) && codigoCompativel(p, codigo));
     if (doCadastro.length === 1) return { promotor: doCadastro[0] };
     const primeiro = primeiroNome(nome);
-    const candidatos = lista.filter((p) => !p.pendente && primeiroNome(p.nome) === primeiro
+    const candidatos = lista.filter((p) => !p.pendente && primeiroNome(p.nome) === primeiro && codigoCompativel(p, codigo)
       && ag && (normalizar(p.agencia) === ag || normalizar(p.empresa) === ag));
     if (candidatos.length === 1) return { promotor: candidatos[0] };
     if (candidatos.length > 1) return { promotor: null, motivo: 'ambiguo', candidatos };
@@ -373,9 +384,11 @@ async function gravarPromotores(dados, usuario) {
     let total = 0;
     const ligados = [];
     let ambiguos = 0;
+    let outroCodigo = 0;
     for (const p of itens) {
-      const { promotor: existente, ambiguo } = cadastro.achar(p);
+      const { promotor: existente, ambiguo, comOutroCodigo = [] } = cadastro.achar(p);
       if (ambiguo) { ambiguos++; continue; } // mais de um com esse nome e sem código: não adivinha
+      if (!existente && comOutroCodigo.length) outroCodigo++;
       let id;
       if (existente) {
         // Completa: só o que veio preenchido substitui. Vazio mantém o valor do sistema.
@@ -414,6 +427,7 @@ async function gravarPromotores(dados, usuario) {
       total += CAMPOS_DINHEIRO.reduce((soma, campo) => soma + (p[campo] || 0), 0);
     }
     if (ambiguos) registro.avisos['Mais de um promotor com o mesmo nome no sistema e sem código para desempatar (não atualizado)'] = ambiguos;
+    if (outroCodigo) registro.avisos['Mesmo nome de um promotor do sistema, mas com código diferente (criado como outra pessoa)'] = outroCodigo;
     contagem.pendentesLigados = ligados.length;
     contagem.atendimentosLigados = ligados.reduce((s, l) => s + l.atendimentos, 0);
     const resultado = {
@@ -738,18 +752,24 @@ async function previaDaImportacao(dados) {
     const itens = todos.filter((p) => !ehSupervisor(p.cargo));
     const supervisores = todos.length - itens.length;
     const cadastro = await carregarPromotores(consulta);
-    const grupos = { atualizar: [], criar: [], ambiguos: [] };
+    const grupos = { atualizar: [], criar: [], ambiguos: [], codigoDiferente: [] };
     for (const p of itens) {
-      const { promotor, ambiguo } = cadastro.achar(p);
+      const { promotor, ambiguo, comOutroCodigo = [] } = cadastro.achar(p);
       if (ambiguo) grupos.ambiguos.push(p.nome);
       else if (promotor) grupos.atualizar.push(promotor.nome === p.nome ? p.nome : `${p.nome} → ${promotor.nome}`);
-      else grupos.criar.push(p.nome);
+      else {
+        grupos.criar.push(p.nome);
+        if (comOutroCodigo.length) {
+          grupos.codigoDiferente.push(`${p.nome} (planilha: cód. ${p.codigo}; sistema: cód. ${comOutroCodigo.map((o) => o.codigo).join(', ')})`);
+        }
+      }
     }
     const lista = (nomes) => (nomes.length > 30 ? `${nomes.slice(0, 30).join(', ')} e mais ${nomes.length - 30}` : nomes.join(', '));
     const mensagem = [
       `Vai atualizar ${grupos.atualizar.length} promotor(es) que já existem: o que vier preenchido no arquivo substitui; o que vier vazio mantém o valor do sistema.`,
       ...(grupos.atualizar.length ? [`Atualizados: ${lista(grupos.atualizar)}.`] : []),
       `Vai criar ${grupos.criar.length} promotor(es) novo(s)${grupos.criar.length ? `: ${lista(grupos.criar)}` : ''}. Confira se algum já existe com outro nome (evita duplicado).`,
+      ...(grupos.codigoDiferente.length ? [`Atenção: ${grupos.codigoDiferente.length} com o mesmo nome de alguém do sistema, mas com código diferente, vão ser criados como OUTRA pessoa: ${lista(grupos.codigoDiferente)}. Se for a mesma pessoa, corrija o código antes.`] : []),
       ...(grupos.ambiguos.length ? [`Não vai mexer em ${grupos.ambiguos.length} (mais de um com o mesmo nome no sistema e sem código): ${lista(grupos.ambiguos)}.`] : []),
       ...(supervisores ? [`${supervisores} supervisor(es) vão para o cadastro de supervisores (sem salário nem custo).`] : []),
       'Promotores pendentes que forem a mesma pessoa serão ligados automaticamente. A importação do cadastro não pode ser desfeita.',
