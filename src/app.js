@@ -111,6 +111,13 @@ function criarApp() {
     setHeaders: (res) => { if (res.req.query.v) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); },
   }));
 
+  // Respostas da API têm salários e dados da empresa: nunca guardar em cache (navegador ou proxy no caminho).
+  // Vale para tudo em /api, inclusive login, erros e exportações. A "memória" das telas usa a sessionStorage, não o cache.
+  app.use('/api', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
+
   // ---------- Login ----------
   app.post('/api/login', async (req, res) => {
     const usuario = await auth.entrar(req.body.login, req.body.senha, req.ip);
