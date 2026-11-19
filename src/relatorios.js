@@ -11,10 +11,22 @@ const { ErroDeValidacao } = require('./auth');
 const { CAMPOS_CUSTO, custoFixo, agenciaDe, somar, agrupar } = calc;
 const meta = () => config.meta;
 
+// Período aceito pela API: de jan/2020 até o mês atual + 12. Fora disso, 400 (evita consultas absurdas).
+const PRIMEIRO_MES = '2020-01';
+function ultimoMesAceito(agora = new Date()) {
+  const d = new Date(agora.getFullYear(), agora.getMonth() + 12, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+const rotulo = (mes) => `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][Number(mes.slice(5)) - 1]}/${mes.slice(0, 4)}`;
+
 function lerPeriodo(query) {
   const { de, ate } = query;
   if (!mesValido(de) || !mesValido(ate)) throw new ErroDeValidacao('Informe o período (mês inicial e final).');
   if (de > ate) throw new ErroDeValidacao('O mês inicial não pode ser depois do mês final.');
+  const ultimo = ultimoMesAceito();
+  if (de < PRIMEIRO_MES || ate > ultimo) {
+    throw new ErroDeValidacao(`Período fora do aceito: escolha meses de ${rotulo(PRIMEIRO_MES)} até ${rotulo(ultimo)}.`);
+  }
   return { de, ate };
 }
 

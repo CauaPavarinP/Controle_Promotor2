@@ -731,6 +731,18 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.ok(achados.includes('Codigo Zero'));
   });
 
+  await t.test('período aceito pela API: de 2020-01 até o mês atual + 12', async () => {
+    const agora = new Date();
+    const mes = (somar) => { const d = new Date(agora.getFullYear(), agora.getMonth() + somar, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+    for (const [de, ate] of [['2019-12', '2026-01'], ['2020-01', mes(13)], ['2026-05', '2026-04']]) {
+      const r = await regis(`/api/resumo?de=${de}&ate=${ate}`);
+      assert.equal(r.status, 400, `${de} a ${ate}`);
+    }
+    assert.match((await regis('/api/resumo?de=2019-12&ate=2026-01')).dados.erro, /de jan\/2020 até/);
+    assert.equal((await regis(`/api/resumo?de=2020-01&ate=${mes(12)}`)).status, 200);
+    assert.equal((await regis('/api/lojas-uf/exportar?de=2019-01&ate=2019-02')).status, 400); // exportações também
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
