@@ -63,6 +63,8 @@ function criarApp() {
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'same-origin',
       'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'",
+      // O navegador passa a usar só HTTPS neste endereço (e nos subdomínios) por 1 ano. Em http:// ele ignora.
+      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
     });
     next();
   });
