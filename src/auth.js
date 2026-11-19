@@ -75,17 +75,27 @@ async function entrar(login, senha, ip) {
     throw new ErroDeAcesso('Login ou senha incorretos.', 401);
   }
   tentativas.delete(chaveLogin);
-  return { id: usuario.id, login: usuario.login, nome: usuario.nome, perfil: usuario.perfil };
+  return { id: usuario.id, login: usuario.login, nome: usuario.nome, perfil: usuario.perfil, sessaoVersao: usuario.sessao_versao };
 }
 
 // ----- Filtros das rotas -----
 
-// Devolve o usuário logado (ou null). Confere no banco a cada chamada: se foi desativado, perde o acesso na hora.
+// Devolve o usuário logado (ou null). Confere no banco a cada chamada:
+//  - se o usuário foi desativado, perde o acesso na hora;
+//  - se a versão da sessão do cookie não é a atual (a pessoa saiu ou trocou a senha depois), o cookie não vale mais.
+//    Cookie sem versão (feito antes desta mudança) também não vale: a pessoa só precisa entrar de novo.
 async function usuarioDaSessao(req) {
   const id = req.session && req.session.usuarioId;
-  if (!Number.isInteger(id)) return null;
-  const [usuario] = await consulta('SELECT id, login, nome, perfil FROM usuarios WHERE id = $1 AND ativo', [id]);
+  const versao = req.session && req.session.versao;
+  if (!Number.isInteger(id) || !Number.isInteger(versao)) return null;
+  const [usuario] = await consulta('SELECT id, login, nome, perfil FROM usuarios WHERE id = $1 AND ativo AND sessao_versao = $2', [id, versao]);
   return usuario || null;
+}
+
+// Invalida TODAS as sessões abertas do usuário (em qualquer computador). Devolve a versão nova.
+async function encerrarSessoes(id) {
+  const [r] = await consulta('UPDATE usuarios SET sessao_versao = sessao_versao + 1 WHERE id = $1 RETURNING sessao_versao', [id]);
+  return r ? r.sessao_versao : null;
 }
 
 // Para as rotas da API: sem login, responde 401.
@@ -151,7 +161,8 @@ async function atualizarUsuario(id, { nome, perfil, ativo, senha }, quemPediu) {
   }
   await consulta('UPDATE usuarios SET nome = $1, perfil = $2, ativo = $3 WHERE id = $4', [novo.nome, novo.perfil, novo.ativo, id]);
   if (trocaSenha) {
-    await consulta('UPDATE usuarios SET senha_hash = $1 WHERE id = $2', [await bcrypt.hash(senha, 10), id]);
+    // Senha nova definida pelo suporte: derruba as sessões abertas daquela pessoa.
+    await consulta('UPDATE usuarios SET senha_hash = $1, sessao_versao = sessao_versao + 1 WHERE id = $2', [await bcrypt.hash(senha, 10), id]);
   }
 }
 
@@ -169,7 +180,11 @@ async function trocarPropriaSenha(id, senhaAtual, senhaNova) {
     throw new ErroDeValidacao('A senha atual está incorreta.');
   }
   validarSenha(senhaNova);
-  await consulta('UPDATE usuarios SET senha_hash = $1 WHERE id = $2', [await bcrypt.hash(senhaNova, 10), id]);
+  // Derruba as outras sessões (outros computadores, cookie copiado). Devolve a versão nova para a rota manter
+  // logada a sessão de quem acabou de trocar.
+  const [r] = await consulta('UPDATE usuarios SET senha_hash = $1, sessao_versao = sessao_versao + 1 WHERE id = $2 RETURNING sessao_versao',
+    [await bcrypt.hash(senhaNova, 10), id]);
+  return r.sessao_versao;
 }
 
 // Cria o primeiro usuário (suporte) a partir das variáveis ADMIN_*, só quando o banco ainda não tem ninguém.
@@ -186,6 +201,6 @@ async function criarPrimeiroUsuario() {
 }
 
 module.exports = {
-  entrar, usuarioDaSessao, exigirLogin, exigirSuporte, listarUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
+  entrar, usuarioDaSessao, encerrarSessoes, exigirLogin, exigirSuporte, listarUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
   trocarPropriaSenha, criarPrimeiroUsuario, ErroDeValidacao,
 };

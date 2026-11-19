@@ -120,12 +120,16 @@ function criarApp() {
 
   // ---------- Login ----------
   app.post('/api/login', async (req, res) => {
-    const usuario = await auth.entrar(req.body.login, req.body.senha, req.ip);
+    const { sessaoVersao, ...usuario } = await auth.entrar(req.body.login, req.body.senha, req.ip);
     req.session = null; // começa uma sessão nova a cada login
-    req.session = { usuarioId: usuario.id };
+    req.session = { usuarioId: usuario.id, versao: sessaoVersao };
     res.json(usuario);
   });
-  app.post('/api/logout', (req, res) => {
+  // Sair invalida no servidor TODAS as sessões do usuário (inclusive uma cópia do cookie), e não só apaga o cookie
+  // deste navegador. Só conta se a sessão ainda for válida: um cookie velho não consegue derrubar quem está logado.
+  app.post('/api/logout', async (req, res) => {
+    const usuario = await auth.usuarioDaSessao(req);
+    if (usuario) await auth.encerrarSessoes(usuario.id);
     req.session = null;
     res.json({ ok: true });
   });
@@ -160,7 +164,8 @@ function criarApp() {
   });
   api.get('/promotores-nomes', async (req, res) => res.json(await relatorios.nomesDosPromotores()));
   api.post('/conta/senha', async (req, res) => {
-    await auth.trocarPropriaSenha(req.usuario.id, req.body.senhaAtual, req.body.senhaNova);
+    // Trocar a senha derruba as outras sessões; esta continua, com a versão nova.
+    req.session.versao = await auth.trocarPropriaSenha(req.usuario.id, req.body.senhaAtual, req.body.senhaNova);
     res.json({ ok: true });
   });
 
