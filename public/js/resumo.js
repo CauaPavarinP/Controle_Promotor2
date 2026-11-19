@@ -11,7 +11,9 @@ async function carregar() {
       mostrarAvisos(semDados ? [] : r.avisos);
 
       const classe = r.situacao === 'dentro' ? 'bom' : ['fora', 'sem_faturamento'].includes(r.situacao) ? 'ruim' : '';
-      const detalhesCusto = [`${r.promotores} promotor(es)`];
+      // Conta só quem entra no custo do período: com atendimento lançado ou com salário no cadastro (mesmo sem loja).
+      // A tela Promotores lista todos os cadastrados, inclusive quem não teve nada no período.
+      const detalhesCusto = [`${r.promotores} promotor(es) com atendimento ou salário no período`];
       if (r.custoSemLojas) detalhesCusto.push(`${reais(r.custoSemLojas)} sem loja lançada`);
       if (r.custoNaoInformado) detalhesCusto.push(`${r.custoNaoInformado} com custo não informado`);
       const outros = [

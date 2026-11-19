@@ -2,6 +2,7 @@
 const { consulta, transacao } = require('./db');
 const { normalizar, primeiroNome, ehSupervisor } = require('./planilha');
 const { gravarSupervisor } = require('./ligacaoSupervisor');
+const { ligarDentro } = require('./ligacaoPromotor');
 const { ErroDeValidacao } = require('./auth');
 
 const texto = (v, tamanho) => String(v ?? '').replace(/\u0000/g, '').trim().slice(0, tamanho);
@@ -57,7 +58,10 @@ async function juntarSupervisores(origemId, destinoId) {
 
 // ---------- Promotores não identificados ----------
 
-const PROMOTORES_DO_CADASTRO = "SELECT id, nome, agencia, empresa, codigo, tipo, cargo, cadastrado FROM promotores WHERE pendente = '' ORDER BY nome";
+// Quem pode receber a ligação: promotor que não está pendente, ou que já foi cadastrado (pela tela ou pela planilha
+// de cadastro). Antes só entravam os não pendentes, e um pendente editado na tela continuava de fora.
+const PROMOTORES_DO_CADASTRO = `SELECT id, nome, agencia, empresa, codigo, tipo, cargo, cadastrado FROM promotores
+  WHERE pendente = '' OR cadastrado ORDER BY nome`;
 
 // Lista os pendentes, com sugestões: quem tem o mesmo primeiro nome (os da mesma agência/empresa primeiro).
 async function naoIdentificados() {
@@ -65,14 +69,14 @@ async function naoIdentificados() {
     consulta(`SELECT p.id, p.nome, p.agencia, p.tipo, p.codigo, p.pendente,
         (SELECT count(DISTINCT v.loja_id)::int FROM visitas v WHERE v.promotor_id = p.id) AS lojas,
         (SELECT string_agg(DISTINCT v.mes, ', ' ORDER BY v.mes) FROM visitas v WHERE v.promotor_id = p.id) AS meses
-      FROM promotores p WHERE p.pendente <> '' ORDER BY p.agencia, p.nome`),
+      FROM promotores p WHERE p.pendente <> '' AND NOT p.cadastrado ORDER BY p.agencia, p.nome`),
     consulta(PROMOTORES_DO_CADASTRO).then((lista) => lista.filter((c) => !ehSupervisor(c.cargo))), // supervisor não é opção
   ]);
   return {
     pendentes: pendentes.map((p) => {
       const ag = normalizar(p.agencia);
       const mesmaEmpresa = (c) => ag && (normalizar(c.agencia) === ag || normalizar(c.empresa) === ag);
-      const candidatos = cadastro.filter((c) => primeiroNome(c.nome) === primeiroNome(p.nome))
+      const candidatos = cadastro.filter((c) => c.id !== p.id && primeiroNome(c.nome) === primeiroNome(p.nome))
         .sort((x, y) => Number(mesmaEmpresa(y)) - Number(mesmaEmpresa(x)) || Number(y.cadastrado) - Number(x.cadastrado));
       return { ...p, meses: p.meses || '', candidatos: candidatos.map((c) => c.id) };
     }),
@@ -85,27 +89,25 @@ async function naoIdentificados() {
 async function ligarPromotor(pendenteId, destinoId) {
   if (!Number.isInteger(destinoId) || destinoId < 1 || destinoId === pendenteId) throw new ErroDeValidacao('Escolha o promotor do cadastro.');
   return transacao(async (rodar) => {
-    const [pendente] = await rodar("SELECT * FROM promotores WHERE id = $1 AND pendente <> '' FOR UPDATE", [pendenteId]);
+    const [pendente] = await rodar("SELECT * FROM promotores WHERE id = $1 AND pendente <> '' AND NOT cadastrado FOR UPDATE", [pendenteId]);
     if (!pendente) throw new ErroDeValidacao('Este promotor não está mais pendente.');
-    const [destino] = await rodar("SELECT * FROM promotores WHERE id = $1 AND pendente = '' FOR UPDATE", [destinoId]);
+    const [destino] = await rodar("SELECT * FROM promotores WHERE id = $1 AND (pendente = '' OR cadastrado) FOR UPDATE", [destinoId]);
     if (!destino || ehSupervisor(destino.cargo)) throw new ErroDeValidacao('Promotor do cadastro não encontrado.');
-
-    // Se o promotor do cadastro já tem atendimento na mesma loja e mês, junta os dois (soma visitas e valor).
-    await rodar(`UPDATE visitas d SET qtd_visitas = d.qtd_visitas + o.qtd_visitas,
-        custo = CASE WHEN d.custo IS NULL AND o.custo IS NULL THEN NULL ELSE coalesce(d.custo, 0) + coalesce(o.custo, 0) END
-      FROM visitas o WHERE o.promotor_id = $1 AND d.promotor_id = $2 AND d.loja_id = o.loja_id AND d.mes = o.mes`, [pendenteId, destinoId]);
-    await rodar(`DELETE FROM visitas o USING visitas d
-      WHERE o.promotor_id = $1 AND d.promotor_id = $2 AND d.loja_id = o.loja_id AND d.mes = o.mes`, [pendenteId, destinoId]);
-    const movidos = await rodar('UPDATE visitas SET promotor_id = $2 WHERE promotor_id = $1 RETURNING 1', [pendenteId, destinoId]);
-    if (!destino.agencia && pendente.agencia) await rodar('UPDATE promotores SET agencia = $1 WHERE id = $2', [pendente.agencia, destinoId]);
-    await rodar(`INSERT INTO vinculos_promotor (nome, agencia, promotor_id) VALUES ($1, $2, $3)
-      ON CONFLICT (nome, agencia) DO UPDATE SET promotor_id = EXCLUDED.promotor_id, criado_em = now()`,
-    [normalizar(pendente.nome), normalizar(pendente.agencia), destinoId]);
-    await rodar('DELETE FROM promotores WHERE id = $1', [pendenteId]);
-    return { atendimentos: movidos.length, promotor: destino.nome };
+    const atendimentos = await ligarDentro(rodar, pendente, destino);
+    await rodar("UPDATE promotores SET pendente = '' WHERE id = $1", [destinoId]); // quem recebe a ligação está identificado
+    return { atendimentos, promotor: destino.nome };
   });
 }
 
+// Apaga os promotores pendentes que não têm nenhum atendimento e não foram cadastrados (ex.: sobraram de uma
+// importação desfeita antes de o sistema guardar a importação de origem). Não toca em quem tem atendimento.
+async function apagarPendentesSemAtendimento() {
+  const apagados = await consulta(`DELETE FROM promotores p WHERE p.pendente <> '' AND NOT p.cadastrado
+    AND NOT EXISTS (SELECT 1 FROM visitas v WHERE v.promotor_id = p.id) RETURNING nome`);
+  return { apagados: apagados.length };
+}
+
 module.exports = {
+  apagarPendentesSemAtendimento,
   listarCadastro, criarSupervisor, editarSupervisor, excluirSupervisor, juntarSupervisores, naoIdentificados, ligarPromotor,
 };

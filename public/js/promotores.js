@@ -37,6 +37,9 @@ async function carregar() {
 async function carregarPendentes() {
   const { pendentes, cadastro } = await api('/api/promotores/nao-identificados');
   document.getElementById('nao-identificados').hidden = !pendentes.length;
+  const semAtendimento = pendentes.filter((p) => !p.lojas).length;
+  document.getElementById('sem-atendimento-linha').hidden = !semAtendimento;
+  document.getElementById('sem-atendimento-texto').textContent = `${semAtendimento} destes não têm nenhum atendimento (sobraram de importações desfeitas). `;
   const porId = new Map(cadastro.map((c) => [c.id, c]));
   const rotulo = (c) => `${c.nome} — ${c.agencia || c.empresa || 'sem agência'}${c.codigo ? ` (cód. ${c.codigo})` : ''}`;
   const motivo = { ambiguo: 'Mais de um parecido no cadastro', nao_encontrado: 'CLT que não está no cadastro' };
@@ -58,6 +61,19 @@ async function carregarPendentes() {
 (async () => {
   await iniciarPagina();
   carregarPendentes().catch((erro) => mostrarAviso(document.getElementById('aviso'), erro.message));
+  document.getElementById('limpar-pendentes').addEventListener('click', async () => {
+    const texto = document.getElementById('sem-atendimento-texto').textContent;
+    if (!confirm(`${texto}\n\nExcluir esses promotores pendentes? Quem tem atendimento ou já foi cadastrado não é tocado. Não dá para desfazer.`)) return;
+    try {
+      const r = await api('/api/promotores/nao-identificados/limpar', { method: 'POST' });
+      const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu);
+      await carregarPendentes();
+      await carregar(); // recarregar a lista limpa o aviso: a mensagem vem depois
+      mostrarAviso(document.getElementById('aviso'), `${r.apagados} promotor(es) pendente(s) sem atendimento excluído(s).`, 'ok');
+    } catch (erro) {
+      mostrarAviso(document.getElementById('aviso'), erro.message);
+    }
+  });
   document.getElementById('pendentes').addEventListener('click', async (evento) => {
     const botao = evento.target.closest('button[data-ligar]');
     if (!botao) return;
@@ -65,10 +81,10 @@ async function carregarPendentes() {
     if (!destino.value) return mostrarAviso(document.getElementById('aviso'), 'Escolha o promotor do cadastro antes de ligar.');
     try {
       const r = await api(`/api/promotores/${botao.dataset.ligar}/ligar`, { method: 'POST', json: { destinoId: Number(destino.value) } });
-      mostrarAviso(document.getElementById('aviso'), `Ligado a ${r.promotor}: ${r.atendimentos} atendimento(s) passaram para ele. As próximas importações já usam esta ligação.`, 'ok');
       const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
       await carregarPendentes();
-      carregar();
+      await carregar(); // recarregar a lista limpa o aviso: a mensagem vem depois
+      mostrarAviso(document.getElementById('aviso'), `Ligado a ${r.promotor}: ${r.atendimentos} atendimento(s) passaram para ele. As próximas importações já usam esta ligação.`, 'ok');
     } catch (erro) {
       mostrarAviso(document.getElementById('aviso'), erro.message);
     }

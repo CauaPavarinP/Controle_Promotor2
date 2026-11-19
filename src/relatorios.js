@@ -1,18 +1,32 @@
 // Monta cada tela a partir do motor de cálculo (src/calculo.js): busca no banco tudo o que o período tem,
 // passa pelo "analisar" e agrupa as linhas de atendimento do jeito que a tela precisa.
 const config = require('./config');
-const { consulta } = require('./db');
+const { consulta, transacao } = require('./db');
+const { ligarPendentesDe, ligarDentro } = require('./ligacaoPromotor');
+const { problemaNaData } = require('./datas');
 const calc = require('./calculo');
-const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor } = require('./planilha');
+const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor, codigoNormal } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
 
 const { CAMPOS_CUSTO, custoFixo, agenciaDe, somar, agrupar } = calc;
 const meta = () => config.meta;
 
+// Período aceito pela API: de jan/2020 até o mês atual + 12. Fora disso, 400 (evita consultas absurdas).
+const PRIMEIRO_MES = '2020-01';
+function ultimoMesAceito(agora = new Date()) {
+  const d = new Date(agora.getFullYear(), agora.getMonth() + 12, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+const rotulo = (mes) => `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][Number(mes.slice(5)) - 1]}/${mes.slice(0, 4)}`;
+
 function lerPeriodo(query) {
   const { de, ate } = query;
   if (!mesValido(de) || !mesValido(ate)) throw new ErroDeValidacao('Informe o período (mês inicial e final).');
   if (de > ate) throw new ErroDeValidacao('O mês inicial não pode ser depois do mês final.');
+  const ultimo = ultimoMesAceito();
+  if (de < PRIMEIRO_MES || ate > ultimo) {
+    throw new ErroDeValidacao(`Período fora do aceito: escolha meses de ${rotulo(PRIMEIRO_MES)} até ${rotulo(ultimo)}.`);
+  }
   return { de, ate };
 }
 
@@ -151,7 +165,7 @@ async function listaDePromotores(query) {
         percentual: s.percentual, situacao: s.situacao,
       };
     })
-    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || p.codigo === texto(query.busca))
+    .filter((p) => !busca || contem(p.nome, busca) || contem(p.agencia, busca) || contem(p.empresa, busca) || (codigoNormal(p.codigo) !== '' && codigoNormal(p.codigo) === codigoNormal(query.busca)))
     .filter((p) => !query.situacao || p.situacao === query.situacao)
     .filter((p) => !query.ativo || String(p.ativo) === query.ativo)
     // Primeiro quem mais estoura a meta; quem não tem percentual vai para o fim.
@@ -393,7 +407,8 @@ function validarPromotor(dados) {
   if (ehSupervisor(dados.cargo)) throw new ErroDeValidacao('Supervisor não é promotor: cadastre na tela Supervisores.');
   if (!['CLT', 'MEI', 'AGENCIA', 'FREELANCER'].includes(dados.tipo)) throw new ErroDeValidacao('Escolha o tipo: CLT, MEI, Agência ou Freelancer.');
   const admissao = String(dados.admissao || '').trim();
-  if (admissao && !/^\d{4}-\d{2}-\d{2}$/.test(admissao)) throw new ErroDeValidacao('Data de admissão inválida.');
+  const problema = problemaNaData(admissao);
+  if (problema) throw new ErroDeValidacao(`Data de admissão inválida (${problema}): ${admissao.slice(0, 20)}.`);
   const limpo = {
     nome,
     tipo: dados.tipo,
@@ -413,24 +428,47 @@ function validarPromotor(dados) {
 
 const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'cargo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
 
+// Salva o promotor pela tela (novo ou edição), numa transação só:
+//  - salvo pela tela = cadastrado e identificado (pendente limpo);
+//  - depois procura promotores pendentes que são a mesma pessoa (mesmo código + agência, ou mesmo nome sem acento)
+//    e liga a ele: os atendimentos passam para este promotor e o duplicado é apagado.
+// Devolve { id, ligados: [{ nome, agencia, atendimentos }] }.
 async function salvarPromotor(id, dados) {
   const p = validarPromotor(dados);
-  const [repetido] = await consulta(
-    'SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4',
-    [p.nome, p.agencia, p.codigo, id || 0],
-  );
-  if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
-  const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
-  if (id) {
-    const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
-    // Salvo pela tela = cadastrado (passa a valer como cadastro, inclusive para o aviso de código sem cadastro).
-    const linhas = await consulta(`UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
-    if (!linhas.length) throw new ErroDeValidacao('Promotor não encontrado.');
-    return id;
-  }
-  const marcadores = COLUNAS_PROMOTOR.map((_, i) => `$${i + 1}`).join(', ');
-  const [criado] = await consulta(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}, cadastrado) VALUES (${marcadores}, TRUE) RETURNING id`, valores);
-  return criado.id;
+  return transacao(async (rodar) => {
+    // Mesmo nome, agência e código (código sem zeros à esquerda: "06" = "6"). Pendente ainda não cadastrado não
+    // conta como duplicado: ele é a mesma pessoa e vai ser ligado a este promotor logo abaixo.
+    const mesmos = await rodar(`SELECT id, codigo FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND id <> $3
+      AND (pendente = '' OR cadastrado)`, [p.nome, p.agencia, id || 0]);
+    const repetido = mesmos.find((m) => codigoNormal(m.codigo) === codigoNormal(p.codigo));
+    if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
+    const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
+    // Pendente IDÊNTICO (mesmo nome, agência e código, a identidade única do banco): é a mesma pessoa.
+    // Novo cadastro: aproveita o próprio pendente (vira cadastrado com os dados da tela e mantém os atendimentos).
+    // Edição: liga o pendente a este promotor antes de gravar (senão o banco recusaria por ser repetido).
+    const [identico] = await rodar(`SELECT * FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3
+      AND id <> $4 AND pendente <> '' AND NOT cadastrado FOR UPDATE`, [p.nome, p.agencia, p.codigo, id || 0]);
+    const aproveitados = [];
+    if (identico && !id) {
+      id = identico.id;
+      const [{ n }] = await rodar('SELECT count(*)::int AS n FROM visitas WHERE promotor_id = $1', [id]);
+      aproveitados.push({ nome: identico.nome, agencia: identico.agencia, atendimentos: n });
+    } else if (identico) {
+      const [destino] = await rodar('SELECT * FROM promotores WHERE id = $1 FOR UPDATE', [id]);
+      if (destino) aproveitados.push({ nome: identico.nome, agencia: identico.agencia, atendimentos: await ligarDentro(rodar, identico, destino) });
+    }
+    let salvo = id;
+    if (id) {
+      const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
+      const linhas = await rodar(`UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE, pendente = '' WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
+      if (!linhas.length) throw new ErroDeValidacao('Promotor não encontrado.');
+    } else {
+      const marcadores = COLUNAS_PROMOTOR.map((_, i) => `$${i + 1}`).join(', ');
+      const [criado] = await rodar(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}, cadastrado, pendente) VALUES (${marcadores}, TRUE, '') RETURNING id`, valores);
+      salvo = criado.id;
+    }
+    return { id: salvo, ligados: [...aproveitados, ...await ligarPendentesDe(rodar, salvo)] };
+  });
 }
 
 // Número inteiro positivo que cabe na coluna de id do banco. Qualquer outra coisa vira 0 (que não existe).

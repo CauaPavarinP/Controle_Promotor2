@@ -8,7 +8,10 @@ let paginas = null; // controla qual página da tabela de lojas está na tela
 // manterPagina = true quando só recarregamos os mesmos dados (ex.: depois de excluir uma loja).
 async function carregar(manterPagina = false) {
   const aviso = document.getElementById('aviso');
-  mostrarAviso(aviso, '');
+  // Aviso deixado pelo formulário: pendentes que foram ligados automaticamente a este promotor ao salvar.
+  const ligacao = guardado('aviso-ligacao');
+  mostrarAviso(aviso, ligacao || '', ligacao ? 'ok' : undefined);
+  if (ligacao) guardar('aviso-ligacao', null);
   try {
     detalhe = await api(`/api/promotores/${idPromotor}?${parametros(periodoAtual())}`);
     const p = detalhe.promotor;

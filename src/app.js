@@ -63,6 +63,8 @@ function criarApp() {
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'same-origin',
       'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'",
+      // O navegador passa a usar só HTTPS neste endereço (e nos subdomínios) por 1 ano. Em http:// ele ignora.
+      'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
     });
     next();
   });
@@ -108,6 +110,13 @@ function criarApp() {
     // Arquivo pedido com versão (?v=...) não muda nunca: o navegador pode guardar por 1 ano sem perguntar de novo.
     setHeaders: (res) => { if (res.req.query.v) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); },
   }));
+
+  // Respostas da API têm salários e dados da empresa: nunca guardar em cache (navegador ou proxy no caminho).
+  // Vale para tudo em /api, inclusive login, erros e exportações. A "memória" das telas usa a sessionStorage, não o cache.
+  app.use('/api', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
 
   // ---------- Login ----------
   app.post('/api/login', async (req, res) => {
@@ -164,6 +173,8 @@ function criarApp() {
 
   // Promotores que a importação não identificou com certeza, e a ligação feita à mão (fica guardada).
   api.get('/promotores/nao-identificados', async (req, res) => res.json(await supervisores.naoIdentificados()));
+  // Apaga os pendentes sem nenhum atendimento (a tela pede confirmação antes).
+  api.post('/promotores/nao-identificados/limpar', async (req, res) => res.json(await supervisores.apagarPendentesSemAtendimento()));
   api.post('/promotores/:id/ligar', async (req, res) => {
     res.json({ ok: true, ...(await supervisores.ligarPromotor(Number(req.params.id), Number(req.body.destinoId))) });
   });
@@ -192,8 +203,8 @@ function criarApp() {
     if (!detalhe) return res.status(404).json({ erro: 'Promotor não encontrado.' });
     res.json(detalhe);
   });
-  api.post('/promotores', async (req, res) => res.json({ id: await relatorios.salvarPromotor(null, req.body) }));
-  api.put('/promotores/:id', async (req, res) => res.json({ id: await relatorios.salvarPromotor(Number(req.params.id), req.body) }));
+  api.post('/promotores', async (req, res) => res.json(await relatorios.salvarPromotor(null, req.body)));
+  api.put('/promotores/:id', async (req, res) => res.json(await relatorios.salvarPromotor(Number(req.params.id), req.body)));
 
   api.post('/visitas', async (req, res) => {
     await relatorios.salvarVisita(req.body);

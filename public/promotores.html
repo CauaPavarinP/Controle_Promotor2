@@ -11,7 +11,7 @@
     <nav class="menu" id="menu" aria-label="Menu principal"></nav>
     <main class="conteudo">
       <div class="topo">
-        <div><h1>Promotores</h1><p class="subtitulo">Clique em um promotor para ver todas as informações dele.</p></div>
+        <div><h1>Promotores</h1><p class="subtitulo">Todos os promotores cadastrados, inclusive quem não teve atendimento no período (o Resumo conta só quem teve atendimento ou salário no período). Clique em um promotor para ver todas as informações dele.</p></div>
         <div class="acoes">
           <button type="button" id="novo">Novo promotor</button>
           <button type="button" id="exportar" class="secundario">Exportar Excel</button>
@@ -39,7 +39,9 @@
       <div id="aviso" class="aviso" hidden></div>
       <div class="painel" id="nao-identificados" hidden>
         <h2>Promotores não identificados</h2>
-        <p class="ajuda">A importação não conseguiu saber com certeza quem é cada um destes (mais de um parecido no cadastro, ou CLT que não está no cadastro). Escolha o promotor certo e clique em Ligar: os atendimentos passam para ele e a ligação fica guardada para as próximas importações.</p>
+        <p class="ajuda">A importação não conseguiu saber com certeza quem é cada um destes (mais de um parecido no cadastro, ou CLT que não está no cadastro). Escolha o promotor certo e clique em Ligar: os atendimentos passam para ele e a ligação fica guardada para as próximas importações. Também resolve: cadastrar ou editar o promotor (ou importar o cadastro) com o mesmo código e agência, ou o mesmo nome.</p>
+        <p class="ajuda" id="sem-atendimento-linha" hidden><span id="sem-atendimento-texto"></span>
+          <button type="button" class="perigo pequeno" id="limpar-pendentes">Excluir os pendentes sem atendimento</button></p>
         <div class="rolagem"><table>
           <thead><tr><th>Nome na planilha</th><th>Motivo</th><th class="num">Lojas</th><th>Ligar a</th><th></th></tr></thead>
           <tbody id="pendentes"></tbody>

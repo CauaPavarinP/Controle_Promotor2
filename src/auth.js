@@ -142,14 +142,15 @@ async function atualizarUsuario(id, { nome, perfil, ativo, senha }, quemPediu) {
   };
   if (!novo.nome) throw new ErroDeValidacao('Informe o nome.');
   if (!PERFIS.includes(novo.perfil)) throw new ErroDeValidacao('Perfil inválido.');
+  const trocaSenha = senha !== undefined && senha !== '';
+  if (trocaSenha) validarSenha(senha); // antes de gravar qualquer coisa: senha curta não muda nada
   const perdeSuporte = atual.perfil === 'suporte' && atual.ativo && (novo.perfil !== 'suporte' || !novo.ativo);
   if (perdeSuporte) {
     if (id === quemPediu.id) throw new ErroDeValidacao('Você não pode tirar o seu próprio acesso de suporte.');
     await garantirOutroSuporte(id);
   }
   await consulta('UPDATE usuarios SET nome = $1, perfil = $2, ativo = $3 WHERE id = $4', [novo.nome, novo.perfil, novo.ativo, id]);
-  if (senha !== undefined && senha !== '') {
-    validarSenha(senha);
+  if (trocaSenha) {
     await consulta('UPDATE usuarios SET senha_hash = $1 WHERE id = $2', [await bcrypt.hash(senha, 10), id]);
   }
 }

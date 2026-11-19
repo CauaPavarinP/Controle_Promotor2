@@ -1,7 +1,7 @@
 // Conexão com o PostgreSQL e criação das tabelas.
 const { Pool, types } = require('pg');
 const config = require('./config');
-const { chaveDaLoja, separarCargo, normalizar, ehSupervisor } = require('../public/js/planilha-comum');
+const { chaveDaLoja, separarCargo, normalizar, ehSupervisor, codigoNormal } = require('../public/js/planilha-comum');
 const { gravarSupervisor, ligarAtendimentos } = require('./ligacaoSupervisor');
 
 // O PostgreSQL devolve números decimais (numeric) como texto. Aqui pedimos como número.
@@ -172,6 +172,13 @@ CREATE TABLE IF NOT EXISTS supervisores (
 -- Promotor que a importação não conseguiu identificar com certeza:
 -- '' = identificado | 'ambiguo' = mais de um parecido no cadastro | 'nao_encontrado' = CLT que não está no cadastro.
 ALTER TABLE promotores ADD COLUMN IF NOT EXISTS pendente TEXT NOT NULL DEFAULT '';
+-- Correção de dados: promotor já cadastrado (salvo pela tela ou pela planilha de cadastro) não é mais pendente.
+-- Antes, salvar pela tela marcava "cadastrado" mas deixava "pendente", e ele ficava preso na lista de pendências.
+UPDATE promotores SET pendente = '' WHERE cadastrado AND pendente <> '';
+
+-- Importação que criou o promotor (vazio = criado pela tela ou antes desta coluna existir). O "Desfazer" usa isso
+-- para apagar os promotores que a importação criou e que ficaram sem nenhum atendimento.
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS importacao_id INTEGER REFERENCES importacoes(id) ON DELETE SET NULL;
 
 -- Ligação feita à mão na tela: o nome do promotor como vem na planilha (+ agência) é este promotor do cadastro.
 -- Vale para as próximas importações. "nome" e "agencia" ficam sem acento e minúsculos.
@@ -263,7 +270,8 @@ async function separarCargosDosNomes() {
   for (const p of candidatos) {
     const { nome, cargo } = separarCargo(p.nome);
     if (!cargo) continue;
-    const [outro] = await consulta('SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4', [nome, p.agencia, p.codigo, p.id]);
+    const mesmos = await consulta('SELECT id, codigo FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND id <> $3', [nome, p.agencia, p.id]);
+    const outro = mesmos.find((m) => codigoNormal(m.codigo) === codigoNormal(p.codigo)); // "06" = "6"
     if (outro) { console.warn(`Cargo não separado do promotor ${p.id} ("${p.nome}"): já existe outro com o nome "${nome}".`); continue; }
     await consulta('UPDATE promotores SET nome = $1, cargo = $2 WHERE id = $3', [nome, cargo, p.id]);
   }

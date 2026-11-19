@@ -630,6 +630,170 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal((await regis(`/api/promotores/${pedro.id}`, { method: 'DELETE' })).status, 404);
   });
 
+  await t.test('pendentes: salvar pela tela limpa o pendente e liga duplicados; lista do Ligar; cadastro completa sem apagar', async () => {
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    const clt = (nome, codigo, loja) => ({ promotor: { nome, tipo: 'CLT', agencia: 'Ag Pend', codigo }, loja: { nome: loja, cnpj: '', cidade: 'P' }, mes: '2026-08', visitas: 2, custo: null });
+    // Atendimentos de CLTs que não estão no cadastro: viram pendentes "nao_encontrado".
+    await gravar({ tipo: 'visitas', arquivo: 'pend.xlsx', itens: [clt('Zé Pendente da Silva', '06', 'Loja P1'), clt('Maria Sem Codigo', '', 'Loja P2'), clt('Ana Pendente Cadastro', '', 'Loja P3')] });
+    const pend = async () => (await regis('/api/promotores/nao-identificados')).dados;
+    const nomesPendentes = async () => (await pend()).pendentes.map((x) => x.nome).filter((n) => /Pendente|Sem Codigo/i.test(n)).sort();
+    assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro', 'Maria Sem Codigo', 'Zé Pendente da Silva']);
+    const visitasDe = async (id) => (await consulta('SELECT count(*)::int AS n FROM visitas WHERE promotor_id = $1', [id]))[0].n;
+
+    // a) + b) Criar pela tela com código "6" (o pendente tem "06"), mesma agência, nome sem acento e em maiúsculas:
+    // liga automaticamente, passa o atendimento e apaga o duplicado.
+    const criado = (await regis('/api/promotores', { method: 'POST', json: { nome: 'ZE PENDENTE DA SILVA', tipo: 'CLT', codigo: '6', agencia: 'Ag Pend', salario: 2000 } })).dados;
+    assert.deepEqual(criado.ligados.map((l) => [l.nome, l.atendimentos]), [['Zé Pendente da Silva', 1]]);
+    assert.equal(await visitasDe(criado.id), 1);
+    assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro', 'Maria Sem Codigo']);
+    // Nome, agência e código IGUAIS aos do pendente: não é "duplicado", é a mesma pessoa (liga em vez de recusar).
+    await gravar({ tipo: 'visitas', arquivo: 'pend2.xlsx', itens: [clt('Igual Igual', '9', 'Loja P4')] });
+    const igual = await regis('/api/promotores', { method: 'POST', json: { nome: 'Igual Igual', tipo: 'CLT', codigo: '9', agencia: 'Ag Pend' } });
+    assert.equal(igual.status, 200, JSON.stringify(igual.dados));
+    assert.deepEqual(igual.dados.ligados.map((l) => l.nome), ['Igual Igual']);
+
+    // a) Editar e salvar o próprio pendente pela tela: deixa de ser pendente e passa a poder receber ligações.
+    const maria = (await pend()).pendentes.find((x) => x.nome === 'Maria Sem Codigo');
+    const editado = (await regis(`/api/promotores/${maria.id}`, { method: 'PUT', json: { nome: 'Maria Sem Codigo', tipo: 'CLT', agencia: 'Ag Pend', salario: 1500 } })).dados;
+    assert.deepEqual([editado.id, editado.ligados], [maria.id, []]);
+    assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro']);
+    const [linhaMaria] = await consulta('SELECT pendente, cadastrado FROM promotores WHERE id = $1', [maria.id]);
+    assert.deepEqual([linhaMaria.pendente, linhaMaria.cadastrado], ['', true]);
+
+    // c) A lista do "Ligar" traz os promotores cadastrados (antes vinha vazia quando todos eram pendentes).
+    const { cadastro } = await pend();
+    assert.ok(cadastro.some((c) => c.id === maria.id) && cadastro.some((c) => c.id === criado.id));
+    assert.ok(!cadastro.some((c) => /Ana Pendente/.test(c.nome))); // pendente não é opção
+
+    // d) Cadastro à mão com dados que a planilha não tem; a planilha traz código "0777" e só o salário novo:
+    // atualiza o mesmo promotor (não duplica) e o que veio vazio NÃO apaga o que foi preenchido à mão.
+    const manual = (await regis('/api/promotores', { method: 'POST', json: {
+      nome: 'Teste Completar', tipo: 'CLT', codigo: '777', empresa: '101 PR', admissao: '2026-03-01', salario: 2000, periculosidade: 300, vale_transporte: 150 } })).dados;
+    const vazio = { periculosidade: null, ajuda_celular: null, ajuda_custo: null, almoco: null, vale_transporte: null, gratificacao: null, outros_custos: null };
+    const cad = { tipo: 'promotores', arquivo: 'cad-completa.xlsx', itens: [{ nome: 'TESTE COMPLETAR', codigo: '0777', tipo: 'CLT', salario: 2500, ...vazio },
+      { nome: 'Ana Pendente Cadastro', codigo: '', tipo: 'CLT', empresa: 'Ag Pend', salario: 1800, ...vazio }] };
+    const previa = (await regis('/api/importar/previa', { method: 'POST', json: cad })).dados;
+    assert.deepEqual([previa.atualizar, previa.criar], [['TESTE COMPLETAR → Teste Completar', 'Ana Pendente Cadastro'], []]);
+    const r = (await gravar(cad)).dados;
+    assert.deepEqual([r.promotoresNovos, r.promotoresAtualizados], [0, 2]);
+    const [depois] = await consulta(`SELECT count(*) OVER ()::int AS iguais, nome, codigo, empresa, admissao, salario::float, periculosidade::float,
+      vale_transporte::float, cadastrado, pendente FROM promotores WHERE lower(nome) = 'teste completar'`);
+    assert.deepEqual(depois, { iguais: 1, nome: 'TESTE COMPLETAR', codigo: '0777', empresa: '101 PR', admissao: '2026-03-01', salario: 2500,
+      periculosidade: 300, vale_transporte: 150, cadastrado: true, pendente: '' });
+    assert.equal(manual.ligados.length, 0);
+    // O pendente "Ana" foi atualizado no lugar (mesmo nome): ficou cadastrado, com o atendimento, e saiu das pendências.
+    assert.deepEqual(await nomesPendentes(), []);
+    const [ana] = await consulta("SELECT id, salario::float, cadastrado, pendente FROM promotores WHERE nome = 'Ana Pendente Cadastro'");
+    assert.deepEqual([ana.salario, ana.cadastrado, ana.pendente, await visitasDe(ana.id)], [1800, true, '', 1]);
+  });
+
+  await t.test('data de admissão: só AAAA-MM-DD que existe, ano de 1950 ao ano atual + 1 (tela e importação)', async () => {
+    const anoQueVem = new Date().getFullYear() + 1;
+    const salvar = (admissao) => regis('/api/promotores', { method: 'POST', json: { nome: `Data Teste ${admissao || 'vazia'}`, tipo: 'CLT', admissao } });
+    for (const [data, trecho] of [['2026-02-31', 'essa data não existe'], ['9999-99-99', 'o ano precisa estar entre 1950'], ['1949-12-31', 'o ano precisa estar entre 1950'],
+      [`${anoQueVem + 1}-01-01`, `entre 1950 e ${anoQueVem}`], ['2026-13-01', 'esse mês não existe'], ['01/02/2026', 'formato AAAA-MM-DD'], ['2025-02-29', 'essa data não existe']]) {
+      const r = await salvar(data);
+      assert.equal(r.status, 400, data);
+      assert.match(r.dados.erro, new RegExp(trecho), data);
+    }
+    for (const data of ['', '2024-02-29', `${anoQueVem}-12-31`, '1950-01-01']) assert.equal((await salvar(data)).status, 200, data || 'vazio');
+    // Editar (PUT) também valida.
+    const [p] = await consulta("SELECT id FROM promotores WHERE nome = 'Data Teste vazia'");
+    assert.equal((await regis(`/api/promotores/${p.id}`, { method: 'PUT', json: { nome: 'Data Teste vazia', tipo: 'CLT', admissao: '2026-04-31' } })).status, 400);
+    // Importação do cadastro: data inválida recusa o arquivo inteiro, sem gravar nada.
+    const antes = (await consulta('SELECT count(*)::int AS n FROM promotores'))[0].n;
+    const r = await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'promotores', arquivo: 'datas.xlsx', itens: [
+      { nome: 'Data Boa', tipo: 'CLT', admissao: '2026-01-10', salario: 1 }, { nome: 'Data Ruim', tipo: 'CLT', admissao: '2026-02-30', salario: 1 }] } });
+    assert.equal(r.status, 400);
+    assert.match(r.dados.erro, /Data de admissão inválida para "Data Ruim" \(essa data não existe\): 2026-02-30/);
+    assert.equal((await consulta('SELECT count(*)::int AS n FROM promotores'))[0].n, antes);
+  });
+
+  await t.test('desfazer apaga os promotores que a importação criou e ficaram sem atendimento; limpar pendentes órfãos', async () => {
+    const item = (nome, loja) => ({ promotor: { nome, tipo: 'CLT', agencia: 'Ag Orfa', codigo: '' }, loja: { nome: loja, cnpj: '', cidade: 'O' }, mes: '2026-09', visitas: 1, custo: 5 });
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'orfa.xlsx', itens: [item('Orfa Um', 'Loja O1'), item('Orfa Dois', 'Loja O2')] } });
+    const [criados] = await consulta("SELECT count(*)::int AS n, min(importacao_id) AS imp FROM promotores WHERE nome LIKE 'Orfa %'");
+    assert.equal(criados.n, 2);
+    // "Orfa Dois" foi cadastrado pela tela depois: não pode ser apagado pelo Desfazer.
+    const [dois] = await consulta("SELECT id FROM promotores WHERE nome = 'Orfa Dois'");
+    await regis(`/api/promotores/${dois.id}`, { method: 'PUT', json: { nome: 'Orfa Dois', tipo: 'CLT', agencia: 'Ag Orfa' } });
+    const d = (await regis(`/api/importacoes/${criados.imp}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.promotoresApagados], [2, 1]);
+    assert.deepEqual((await consulta("SELECT nome FROM promotores WHERE nome LIKE 'Orfa %'")).map((x) => x.nome), ['Orfa Dois']);
+    // Pendente órfão antigo (sem importação de origem e sem atendimento): a tela consegue limpar.
+    await consulta("INSERT INTO promotores (nome, tipo, agencia, pendente) VALUES ('Orfa Antigo', 'CLT', 'Ag Orfa', 'nao_encontrado')");
+    const limpo = (await regis('/api/promotores/nao-identificados/limpar', { method: 'POST' })).dados;
+    assert.ok(limpo.apagados >= 1);
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM promotores WHERE nome = 'Orfa Antigo'"))[0].n, 0);
+    assert.ok((await regis('/api/promotores/nao-identificados')).dados.pendentes.every((x) => x.lojas > 0)); // só ficam os com atendimento
+  });
+
+  await t.test('código sem zeros à esquerda: busca e checagem de duplicado ("06" = "6")', async () => {
+    assert.equal((await regis('/api/promotores', { method: 'POST', json: { nome: 'Codigo Zero', tipo: 'CLT', agencia: 'Ag Cod', codigo: '6' } })).status, 200);
+    const dup = await regis('/api/promotores', { method: 'POST', json: { nome: 'codigo zero', tipo: 'CLT', agencia: 'ag cod', codigo: '006' } });
+    assert.deepEqual([dup.status, dup.dados.erro], [400, 'Já existe um promotor com esse nome, agência e código.']);
+    const achados = (await regis('/api/promotores?de=2026-10&ate=2026-10&busca=06')).dados.promotores.map((x) => x.nome);
+    assert.ok(achados.includes('Codigo Zero'));
+  });
+
+  await t.test('período aceito pela API: de 2020-01 até o mês atual + 12', async () => {
+    const agora = new Date();
+    const mes = (somar) => { const d = new Date(agora.getFullYear(), agora.getMonth() + somar, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+    for (const [de, ate] of [['2019-12', '2026-01'], ['2020-01', mes(13)], ['2026-05', '2026-04']]) {
+      const r = await regis(`/api/resumo?de=${de}&ate=${ate}`);
+      assert.equal(r.status, 400, `${de} a ${ate}`);
+    }
+    assert.match((await regis('/api/resumo?de=2019-12&ate=2026-01')).dados.erro, /de jan\/2020 até/);
+    assert.equal((await regis(`/api/resumo?de=2020-01&ate=${mes(12)}`)).status, 200);
+    assert.equal((await regis('/api/lojas-uf/exportar?de=2019-01&ate=2019-02')).status, 400); // exportações também
+  });
+
+  await t.test('segurança: senha mínima no servidor, /api/usuarios só para o suporte (403), cookie e cabeçalhos', async () => {
+    // Senha mínima de 8 caracteres validada no SERVIDOR: criar usuário, editar usuário e trocar a própria senha.
+    const curta = await suporte('/api/usuarios', { method: 'POST', json: { login: 'curta', nome: 'Curta', senha: '1234567', perfil: 'usuario' } });
+    assert.deepEqual([curta.status, curta.dados.erro], [400, 'A senha precisa ter pelo menos 8 caracteres.']);
+    const reg = (await suporte('/api/usuarios')).dados.find((u) => u.login === 'regis');
+    const editar = await suporte(`/api/usuarios/${reg.id}`, { method: 'PUT', json: { nome: 'Nome Que Nao Pode Gravar', senha: 'curta' } });
+    assert.equal(editar.status, 400);
+    assert.equal((await suporte('/api/usuarios')).dados.find((u) => u.login === 'regis').nome, reg.nome); // nada foi gravado
+    assert.equal((await regis('/api/conta/senha', { method: 'POST', json: { senhaAtual: 'senha-regis', senhaNova: '1234567' } })).status, 400);
+
+    // Usuário comum recebe 403 em TODAS as rotas de usuários (a checagem é no servidor, não só na tela).
+    for (const [metodo, caminho, json] of [['GET', '/api/usuarios'], ['POST', '/api/usuarios', { login: 'x99', nome: 'X', senha: '12345678', perfil: 'suporte' }],
+      ['PUT', `/api/usuarios/${reg.id}`, { perfil: 'suporte' }], ['DELETE', `/api/usuarios/${reg.id}`]]) {
+      assert.equal((await regis(caminho, { method: metodo, ...(json ? { json } : {}) })).status, 403, `${metodo} ${caminho}`);
+    }
+    assert.equal((await suporte('/api/usuarios')).dados.find((u) => u.login === 'regis').perfil, 'usuario');
+
+    // Cabeçalhos: API sem cache e HSTS.
+    const r = await fetch(`${base}/api/eu`, { headers: { cookie: regis.cookie() } });
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(r.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+    assert.equal((await fetch(`${base}/api/resumo`)).headers.get('cache-control'), 'no-store'); // até o 401
+
+    // Cookie de sessão: HttpOnly e SameSite=Lax sempre; Secure em produção (atrás do HTTPS do Render).
+    const entrar = (url, extra) => fetch(`${url}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', ...extra },
+      body: JSON.stringify({ login: 'regis', senha: 'senha-regis' }) });
+    const cookieDev = (await entrar(base, { 'x-forwarded-for': '10.77.0.1' })).headers.getSetCookie().join('; ').toLowerCase();
+    assert.match(cookieDev, /httponly/);
+    assert.match(cookieDev, /samesite=lax/);
+    const config = require('../src/config');
+    const antes = config.producao;
+    config.producao = true;
+    const producao = criarApp().listen(0);
+    config.producao = antes;
+    try {
+      const resposta = await entrar(`http://localhost:${producao.address().port}`, { 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.77.0.2' });
+      const cookie = resposta.headers.getSetCookie().join('; ').toLowerCase();
+      assert.equal(resposta.status, 200);
+      assert.match(cookie, /httponly/);
+      assert.match(cookie, /samesite=lax/);
+      assert.match(cookie, /; secure/);
+    } finally {
+      producao.close();
+    }
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
