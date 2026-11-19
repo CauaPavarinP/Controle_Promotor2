@@ -264,6 +264,7 @@ async function confirmar() {
     if (r.clientesNovos) partes.push(`${r.clientesNovos} CNPJ(s) novo(s) no faturamento do ERP.`);
     if (r.promotoresNovos) partes.push(`${r.promotoresNovos} promotor(es) novo(s) cadastrado(s).`);
     if (r.promotoresAtualizados) partes.push(`${r.promotoresAtualizados} promotor(es) atualizado(s).`);
+    if (r.pendentesLigados) partes.push(`${r.pendentesLigados} promotor(es) pendente(s) ligado(s) automaticamente ao cadastro (${r.atendimentosLigados} atendimento(s) passaram para eles).`);
     if (r.vinculosSupervisor) partes.push(`${r.vinculosSupervisor} vínculo(s) de atendimento com supervisor.`);
     if ((r.supervisoresCriados || []).length) partes.push(`Supervisores novos criados a partir da planilha (confira a grafia): ${r.supervisoresCriados.join(', ')}.`);
     if ((r.supervisoresPorPrimeiroNome || []).length) partes.push(`Ligados pelo primeiro nome (confira): ${r.supervisoresPorPrimeiroNome.join('; ')}.`);

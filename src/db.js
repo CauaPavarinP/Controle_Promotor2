@@ -172,6 +172,9 @@ CREATE TABLE IF NOT EXISTS supervisores (
 -- Promotor que a importação não conseguiu identificar com certeza:
 -- '' = identificado | 'ambiguo' = mais de um parecido no cadastro | 'nao_encontrado' = CLT que não está no cadastro.
 ALTER TABLE promotores ADD COLUMN IF NOT EXISTS pendente TEXT NOT NULL DEFAULT '';
+-- Correção de dados: promotor já cadastrado (salvo pela tela ou pela planilha de cadastro) não é mais pendente.
+-- Antes, salvar pela tela marcava "cadastrado" mas deixava "pendente", e ele ficava preso na lista de pendências.
+UPDATE promotores SET pendente = '' WHERE cadastrado AND pendente <> '';
 
 -- Ligação feita à mão na tela: o nome do promotor como vem na planilha (+ agência) é este promotor do cadastro.
 -- Vale para as próximas importações. "nome" e "agencia" ficam sem acento e minúsculos.

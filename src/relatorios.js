@@ -1,7 +1,8 @@
 // Monta cada tela a partir do motor de cálculo (src/calculo.js): busca no banco tudo o que o período tem,
 // passa pelo "analisar" e agrupa as linhas de atendimento do jeito que a tela precisa.
 const config = require('./config');
-const { consulta } = require('./db');
+const { consulta, transacao } = require('./db');
+const { ligarPendentesDe } = require('./ligacaoPromotor');
 const calc = require('./calculo');
 const { mesValido, normalizar, cnpjValido, ufDe, ehSupervisor } = require('./planilha');
 const { ErroDeValidacao } = require('./auth');
@@ -413,24 +414,32 @@ function validarPromotor(dados) {
 
 const COLUNAS_PROMOTOR = ['nome', 'tipo', 'agencia', 'codigo', 'cargo', 'empresa', 'regiao', 'admissao', 'telefone', 'observacao', 'ativo', ...CAMPOS_CUSTO];
 
+// Salva o promotor pela tela (novo ou edição), numa transação só:
+//  - salvo pela tela = cadastrado e identificado (pendente limpo);
+//  - depois procura promotores pendentes que são a mesma pessoa (mesmo código + agência, ou mesmo nome sem acento)
+//    e liga a ele: os atendimentos passam para este promotor e o duplicado é apagado.
+// Devolve { id, ligados: [{ nome, agencia, atendimentos }] }.
 async function salvarPromotor(id, dados) {
   const p = validarPromotor(dados);
-  const [repetido] = await consulta(
-    'SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4',
-    [p.nome, p.agencia, p.codigo, id || 0],
-  );
-  if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
-  const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
-  if (id) {
-    const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
-    // Salvo pela tela = cadastrado (passa a valer como cadastro, inclusive para o aviso de código sem cadastro).
-    const linhas = await consulta(`UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
-    if (!linhas.length) throw new ErroDeValidacao('Promotor não encontrado.');
-    return id;
-  }
-  const marcadores = COLUNAS_PROMOTOR.map((_, i) => `$${i + 1}`).join(', ');
-  const [criado] = await consulta(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}, cadastrado) VALUES (${marcadores}, TRUE) RETURNING id`, valores);
-  return criado.id;
+  return transacao(async (rodar) => {
+    const [repetido] = await rodar(
+      'SELECT id FROM promotores WHERE lower(nome) = lower($1) AND lower(agencia) = lower($2) AND codigo = $3 AND id <> $4',
+      [p.nome, p.agencia, p.codigo, id || 0],
+    );
+    if (repetido) throw new ErroDeValidacao('Já existe um promotor com esse nome, agência e código.');
+    const valores = COLUNAS_PROMOTOR.map((c) => p[c]);
+    let salvo = id;
+    if (id) {
+      const atribuicoes = COLUNAS_PROMOTOR.map((c, i) => `${c} = $${i + 1}`).join(', ');
+      const linhas = await rodar(`UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE, pendente = '' WHERE id = $${valores.length + 1} RETURNING id`, [...valores, id]);
+      if (!linhas.length) throw new ErroDeValidacao('Promotor não encontrado.');
+    } else {
+      const marcadores = COLUNAS_PROMOTOR.map((_, i) => `$${i + 1}`).join(', ');
+      const [criado] = await rodar(`INSERT INTO promotores (${COLUNAS_PROMOTOR.join(', ')}, cadastrado, pendente) VALUES (${marcadores}, TRUE, '') RETURNING id`, valores);
+      salvo = criado.id;
+    }
+    return { id: salvo, ligados: await ligarPendentesDe(rodar, salvo) };
+  });
 }
 
 // Número inteiro positivo que cabe na coluna de id do banco. Qualquer outra coisa vira 0 (que não existe).

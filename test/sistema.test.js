@@ -630,6 +630,58 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal((await regis(`/api/promotores/${pedro.id}`, { method: 'DELETE' })).status, 404);
   });
 
+  await t.test('pendentes: salvar pela tela limpa o pendente e liga duplicados; lista do Ligar; cadastro completa sem apagar', async () => {
+    const gravar = (d) => regis('/api/importar/gravar', { method: 'POST', json: d });
+    const clt = (nome, codigo, loja) => ({ promotor: { nome, tipo: 'CLT', agencia: 'Ag Pend', codigo }, loja: { nome: loja, cnpj: '', cidade: 'P' }, mes: '2026-08', visitas: 2, custo: null });
+    // Atendimentos de CLTs que não estão no cadastro: viram pendentes "nao_encontrado".
+    await gravar({ tipo: 'visitas', arquivo: 'pend.xlsx', itens: [clt('Zé Pendente da Silva', '06', 'Loja P1'), clt('Maria Sem Codigo', '', 'Loja P2'), clt('Ana Pendente Cadastro', '', 'Loja P3')] });
+    const pend = async () => (await regis('/api/promotores/nao-identificados')).dados;
+    const nomesPendentes = async () => (await pend()).pendentes.map((x) => x.nome).filter((n) => /Pendente|Sem Codigo/i.test(n)).sort();
+    assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro', 'Maria Sem Codigo', 'Zé Pendente da Silva']);
+    const visitasDe = async (id) => (await consulta('SELECT count(*)::int AS n FROM visitas WHERE promotor_id = $1', [id]))[0].n;
+
+    // a) + b) Criar pela tela com código "6" (o pendente tem "06"), mesma agência, nome sem acento e em maiúsculas:
+    // liga automaticamente, passa o atendimento e apaga o duplicado.
+    const criado = (await regis('/api/promotores', { method: 'POST', json: { nome: 'ZE PENDENTE DA SILVA', tipo: 'CLT', codigo: '6', agencia: 'Ag Pend', salario: 2000 } })).dados;
+    assert.deepEqual(criado.ligados.map((l) => [l.nome, l.atendimentos]), [['Zé Pendente da Silva', 1]]);
+    assert.equal(await visitasDe(criado.id), 1);
+    assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro', 'Maria Sem Codigo']);
+
+    // a) Editar e salvar o próprio pendente pela tela: deixa de ser pendente e passa a poder receber ligações.
+    const maria = (await pend()).pendentes.find((x) => x.nome === 'Maria Sem Codigo');
+    const editado = (await regis(`/api/promotores/${maria.id}`, { method: 'PUT', json: { nome: 'Maria Sem Codigo', tipo: 'CLT', agencia: 'Ag Pend', salario: 1500 } })).dados;
+    assert.deepEqual([editado.id, editado.ligados], [maria.id, []]);
+    assert.deepEqual(await nomesPendentes(), ['Ana Pendente Cadastro']);
+    const [linhaMaria] = await consulta('SELECT pendente, cadastrado FROM promotores WHERE id = $1', [maria.id]);
+    assert.deepEqual([linhaMaria.pendente, linhaMaria.cadastrado], ['', true]);
+
+    // c) A lista do "Ligar" traz os promotores cadastrados (antes vinha vazia quando todos eram pendentes).
+    const { cadastro } = await pend();
+    assert.ok(cadastro.some((c) => c.id === maria.id) && cadastro.some((c) => c.id === criado.id));
+    assert.ok(!cadastro.some((c) => /Ana Pendente/.test(c.nome))); // pendente não é opção
+
+    // d) Cadastro à mão com dados que a planilha não tem; a planilha traz código "0777" e só o salário novo:
+    // atualiza o mesmo promotor (não duplica) e o que veio vazio NÃO apaga o que foi preenchido à mão.
+    const manual = (await regis('/api/promotores', { method: 'POST', json: {
+      nome: 'Teste Completar', tipo: 'CLT', codigo: '777', empresa: '101 PR', admissao: '2026-03-01', salario: 2000, periculosidade: 300, vale_transporte: 150 } })).dados;
+    const vazio = { periculosidade: null, ajuda_celular: null, ajuda_custo: null, almoco: null, vale_transporte: null, gratificacao: null, outros_custos: null };
+    const cad = { tipo: 'promotores', arquivo: 'cad-completa.xlsx', itens: [{ nome: 'TESTE COMPLETAR', codigo: '0777', tipo: 'CLT', salario: 2500, ...vazio },
+      { nome: 'Ana Pendente Cadastro', codigo: '', tipo: 'CLT', empresa: 'Ag Pend', salario: 1800, ...vazio }] };
+    const previa = (await regis('/api/importar/previa', { method: 'POST', json: cad })).dados;
+    assert.deepEqual([previa.atualizar, previa.criar], [['TESTE COMPLETAR → Teste Completar', 'Ana Pendente Cadastro'], []]);
+    const r = (await gravar(cad)).dados;
+    assert.deepEqual([r.promotoresNovos, r.promotoresAtualizados], [0, 2]);
+    const [depois] = await consulta(`SELECT count(*) OVER ()::int AS iguais, nome, codigo, empresa, admissao, salario::float, periculosidade::float,
+      vale_transporte::float, cadastrado, pendente FROM promotores WHERE lower(nome) = 'teste completar'`);
+    assert.deepEqual(depois, { iguais: 1, nome: 'TESTE COMPLETAR', codigo: '0777', empresa: '101 PR', admissao: '2026-03-01', salario: 2500,
+      periculosidade: 300, vale_transporte: 150, cadastrado: true, pendente: '' });
+    assert.equal(manual.ligados.length, 0);
+    // O pendente "Ana" foi atualizado no lugar (mesmo nome): ficou cadastrado, com o atendimento, e saiu das pendências.
+    assert.deepEqual(await nomesPendentes(), []);
+    const [ana] = await consulta("SELECT id, salario::float, cadastrado, pendente FROM promotores WHERE nome = 'Ana Pendente Cadastro'");
+    assert.deepEqual([ana.salario, ana.cadastrado, ana.pendente, await visitasDe(ana.id)], [1800, true, '', 1]);
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

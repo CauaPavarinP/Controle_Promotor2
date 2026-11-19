@@ -3,6 +3,7 @@
 // "itens" prontos. Mesmo assim conferimos tudo de novo: o servidor nunca confia no que vem do navegador.
 const { transacao, consulta } = require('./db');
 const { gravarSupervisor, ligarAtendimentos } = require('./ligacaoSupervisor');
+const { ligarPendentesDe } = require('./ligacaoPromotor');
 const {
   mesValido, primeiroNome, ufDe, chaveDaLoja, separarCargo, codigoNormal, normalizar, ehSupervisor, separarSupervisores, TIPOS_VALIDOS, CAMPOS_DINHEIRO,
 } = require('./planilha');
@@ -256,9 +257,11 @@ async function gravarFaturamento(dados, usuario) {
 
 // Carrega o cadastro de promotores e devolve duas formas de achar "o mesmo promotor" que veio na planilha.
 //
-// achar (usada no CADASTRO de promotores):
+// achar (usada no CADASTRO de promotores). Devolve { promotor } ou { promotor: null, ambiguo: true }:
 //   1º) mesmo código E mesmo primeiro nome (código sem zeros à esquerda: "06" = "6");
-//   2º) mesmo nome e mesma agência.
+//   2º) mesmo código E mesma agência (a agência ou a empresa da planilha igual à agência ou à empresa do sistema);
+//   3º) mesmo nome normalizado (sem acento, minúsculo, sem espaços duplos), preferindo quem já está cadastrado.
+//       Mais de um com o mesmo nome e nenhum código para desempatar: não adivinha (ambiguo).
 //
 // identificar (usada nos ATENDIMENTOS; nem todo CLT, MEI ou promotor de agência tem código):
 //   1º) com código: código + primeiro nome;
@@ -281,9 +284,21 @@ async function carregarPromotores(rodar) {
     return (cod && lista.find((p) => codigoNormal(p.codigo) === cod && primeiroNome(p.nome) === primeiro)) || null;
   };
 
-  const achar = ({ nome, agencia = '', codigo = '' }) => porCodigo({ nome, codigo })
-    || lista.find((p) => p.nome.toLowerCase() === nome.toLowerCase() && p.agencia.toLowerCase() === agencia.toLowerCase())
-    || null;
+  const achar = ({ nome, agencia = '', empresa = '', codigo = '' }) => {
+    const peloCodigo = porCodigo({ nome, codigo });
+    if (peloCodigo) return { promotor: peloCodigo };
+    const cod = codigoNormal(codigo);
+    const minhas = [agencia, empresa].map(normalizar).filter(Boolean);
+    const daAgencia = cod && minhas.length
+      ? lista.filter((p) => codigoNormal(p.codigo) === cod && [p.agencia, p.empresa].some((a) => minhas.includes(normalizar(a))))
+      : [];
+    if (daAgencia.length === 1) return { promotor: daAgencia[0] };
+    const mesmoNome = lista.filter((p) => normalizar(p.nome) === normalizar(nome));
+    const cadastrados = mesmoNome.filter((p) => p.cadastrado || !p.pendente);
+    const escolhidos = cadastrados.length ? cadastrados : mesmoNome;
+    if (escolhidos.length === 1) return { promotor: escolhidos[0] };
+    return { promotor: null, ambiguo: escolhidos.length > 1 };
+  };
 
   const identificar = ({ nome, agencia = '', codigo = '' }) => {
     const peloCodigo = porCodigo({ nome, codigo });
@@ -294,6 +309,10 @@ async function carregarPromotores(rodar) {
     // O próprio promotor pendente de uma importação anterior também conta: assim não duplica a cada importação.
     const completo = lista.find((p) => normalizar(p.nome) === normalizar(nome) && normalizar(p.agencia) === ag);
     if (completo) return { promotor: completo };
+    // Nome completo igual ao de UM ÚNICO promotor do cadastro (ex.: CLT cuja agência no arquivo é diferente da
+    // empresa do cadastro). Com mais de um, segue para as regras abaixo.
+    const doCadastro = lista.filter((p) => p.cadastrado && normalizar(p.nome) === normalizar(nome));
+    if (doCadastro.length === 1) return { promotor: doCadastro[0] };
     const primeiro = primeiroNome(nome);
     const candidatos = lista.filter((p) => !p.pendente && primeiroNome(p.nome) === primeiro
       && ag && (normalizar(p.agencia) === ag || normalizar(p.empresa) === ag));
@@ -306,7 +325,8 @@ async function carregarPromotores(rodar) {
 }
 
 // Cadastro de promotores com os custos mensais (aba "Promotores CLT" do modelo).
-// Quem já existe é atualizado (salário e demais valores passam a ser os da planilha); quem não existe é criado.
+// Quem já existe é COMPLETADO: o que veio preenchido na planilha substitui o valor do sistema; célula vazia (ou coluna
+// que não existe na planilha) mantém o que já estava, inclusive o que foi preenchido à mão. Quem não existe é criado.
 // O cargo que vem grudado no nome ("NOME - Sup ll") é separado na coluna "cargo".
 function prepararPromotores(dados) {
   const registro = conferirEnvio(dados);
@@ -325,7 +345,10 @@ function prepararPromotores(dados) {
       admissao: /^\d{4}-\d{2}-\d{2}$/.test(item.admissao || '') ? item.admissao : '',
     };
     if (!p.nome) throw new ErroDeImportacao('Há um promotor sem nome nos dados enviados.');
-    for (const campo of CAMPOS_DINHEIRO) p[campo] = conferirNumero(item[campo] ?? 0, { minimo: 0, nome: 'Valor do cadastro' });
+    // null = célula vazia (não mexe no valor do sistema); um "0" escrito na planilha vale como zero.
+    for (const campo of CAMPOS_DINHEIRO) {
+      p[campo] = item[campo] === null || item[campo] === undefined || item[campo] === '' ? null : conferirNumero(item[campo], { minimo: 0, nome: 'Valor do cadastro' });
+    }
     return p;
   });
   return { registro, itens };
@@ -345,33 +368,50 @@ async function gravarPromotores(dados, usuario) {
       if (await gravarSupervisor(rodar, sup)) contagem.supervisoresNovos++; else contagem.supervisoresAtualizados++;
     }
     let total = 0;
+    const ligados = [];
+    let ambiguos = 0;
     for (const p of itens) {
-      const valores = COLUNAS.map((coluna) => p[coluna]);
-      const existente = cadastro.achar(p);
+      const { promotor: existente, ambiguo } = cadastro.achar(p);
+      if (ambiguo) { ambiguos++; continue; } // mais de um com esse nome e sem código: não adivinha
+      let id;
       if (existente) {
-        // Mantém a agência que já estava (ex.: veio da planilha de atendimentos) se o cadastro não trouxer.
-        valores[COLUNAS.indexOf('agencia')] = p.agencia || existente.agencia;
-        const atribuicoes = COLUNAS.map((coluna, i) => `${coluna} = $${i + 1}`).join(', ');
+        // Completa: só o que veio preenchido substitui. Vazio mantém o valor do sistema.
+        const novos = {};
+        for (const coluna of [...COLUNAS, 'telefone', 'observacao']) {
+          const valor = p[coluna];
+          if (valor !== null && valor !== undefined && valor !== '') novos[coluna] = valor;
+        }
+        const colunas = Object.keys(novos);
         await rodar(
-          `UPDATE promotores SET ${atribuicoes}, cadastrado = TRUE,
-             telefone = CASE WHEN $${COLUNAS.length + 1} <> '' THEN $${COLUNAS.length + 1} ELSE telefone END,
-             observacao = CASE WHEN $${COLUNAS.length + 2} <> '' THEN $${COLUNAS.length + 2} ELSE observacao END
-           WHERE id = $${COLUNAS.length + 3}`,
-          [...valores, p.telefone, p.observacao, existente.id],
+          `UPDATE promotores SET ${colunas.map((c, i) => `${c} = $${i + 1}, `).join('')}cadastrado = TRUE, pendente = ''
+           WHERE id = $${colunas.length + 1}`,
+          [...colunas.map((c) => novos[c]), existente.id],
         );
-        Object.assign(existente, p, { agencia: valores[COLUNAS.indexOf('agencia')], cadastrado: true });
+        Object.assign(existente, novos, { cadastrado: true, pendente: '' });
+        id = existente.id;
         contagem.promotoresAtualizados++;
       } else {
-        const marcadores = [...COLUNAS, 'telefone', 'observacao'].map((_, i) => `$${i + 1}`).join(', ');
+        const valores = [...COLUNAS, 'telefone', 'observacao'].map((coluna) => (CAMPOS_DINHEIRO.includes(coluna) ? p[coluna] || 0 : p[coluna]));
+        const marcadores = valores.map((_, i) => `$${i + 1}`).join(', ');
         const [criado] = await rodar(
-          `INSERT INTO promotores (${COLUNAS.join(', ')}, telefone, observacao, cadastrado) VALUES (${marcadores}, TRUE) RETURNING *`,
-          [...valores, p.telefone, p.observacao],
+          `INSERT INTO promotores (${COLUNAS.join(', ')}, telefone, observacao, cadastrado, pendente) VALUES (${marcadores}, TRUE, '') RETURNING *`,
+          valores,
         );
         cadastro.incluir(criado);
+        id = criado.id;
         contagem.promotoresNovos++;
       }
-      total += CAMPOS_DINHEIRO.reduce((soma, campo) => soma + p[campo], 0);
+      // Pendentes (criados pela importação de atendimentos) que são esta mesma pessoa: liga e apaga o duplicado.
+      for (const ligado of await ligarPendentesDe(rodar, id)) {
+        ligados.push(ligado);
+        const i = cadastro.lista.findIndex((x) => normalizar(x.nome) === normalizar(ligado.nome) && x.pendente);
+        if (i >= 0) cadastro.lista.splice(i, 1);
+      }
+      total += CAMPOS_DINHEIRO.reduce((soma, campo) => soma + (p[campo] || 0), 0);
     }
+    if (ambiguos) registro.avisos['Mais de um promotor com o mesmo nome no sistema e sem código para desempatar (não atualizado)'] = ambiguos;
+    contagem.pendentesLigados = ligados.length;
+    contagem.atendimentosLigados = ligados.reduce((s, l) => s + l.atendimentos, 0);
     const resultado = {
       importadas: todos.length,
       ignoradas: Object.values(registro.motivos).reduce((a, b) => a + b, 0),
@@ -694,13 +734,23 @@ async function previaDaImportacao(dados) {
     const itens = todos.filter((p) => !ehSupervisor(p.cargo));
     const supervisores = todos.length - itens.length;
     const cadastro = await carregarPromotores(consulta);
-    const atualizados = itens.filter((p) => cadastro.achar(p)).length;
-    return {
-      linhas: [],
-      mensagem: `Isto vai atualizar ${atualizados} promotor(es) já cadastrado(s) (salário e adicionais passam a ser os do arquivo) e criar ${itens.length - atualizados} novo(s).`
-        + `${supervisores ? ` ${supervisores} supervisor(es) vão para o cadastro de supervisores (sem salário nem custo).` : ''}`
-        + ' A importação do cadastro não pode ser desfeita.',
-    };
+    const grupos = { atualizar: [], criar: [], ambiguos: [] };
+    for (const p of itens) {
+      const { promotor, ambiguo } = cadastro.achar(p);
+      if (ambiguo) grupos.ambiguos.push(p.nome);
+      else if (promotor) grupos.atualizar.push(promotor.nome === p.nome ? p.nome : `${p.nome} → ${promotor.nome}`);
+      else grupos.criar.push(p.nome);
+    }
+    const lista = (nomes) => (nomes.length > 30 ? `${nomes.slice(0, 30).join(', ')} e mais ${nomes.length - 30}` : nomes.join(', '));
+    const mensagem = [
+      `Vai atualizar ${grupos.atualizar.length} promotor(es) que já existem: o que vier preenchido no arquivo substitui; o que vier vazio mantém o valor do sistema.`,
+      ...(grupos.atualizar.length ? [`Atualizados: ${lista(grupos.atualizar)}.`] : []),
+      `Vai criar ${grupos.criar.length} promotor(es) novo(s)${grupos.criar.length ? `: ${lista(grupos.criar)}` : ''}. Confira se algum já existe com outro nome (evita duplicado).`,
+      ...(grupos.ambiguos.length ? [`Não vai mexer em ${grupos.ambiguos.length} (mais de um com o mesmo nome no sistema e sem código): ${lista(grupos.ambiguos)}.`] : []),
+      ...(supervisores ? [`${supervisores} supervisor(es) vão para o cadastro de supervisores (sem salário nem custo).`] : []),
+      'Promotores pendentes que forem a mesma pessoa serão ligados automaticamente. A importação do cadastro não pode ser desfeita.',
+    ].join('\n');
+    return { linhas: [], mensagem, ...grupos };
   }
   throw new ErroDeImportacao('Tipo de importação inválido.');
 }

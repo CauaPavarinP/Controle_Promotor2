@@ -497,7 +497,10 @@
       };
       const textos = [];
       for (const campo of CAMPOS_DINHEIRO) {
-        const { valor, texto } = dinheiroDe(pegar(linha, campo));
+        const bruto = pegar(linha, campo);
+        // Célula vazia (ou coluna que não existe no arquivo) vai como null: o servidor mantém o valor do sistema.
+        if (textoDe(bruto) === '') { item[campo] = null; continue; }
+        const { valor, texto } = dinheiroDe(bruto);
         item[campo] = Math.round(valor * 100) / 100;
         if (texto) textos.push(`${campo.replace('_', ' ')}: "${texto}"`);
       }

@@ -58,6 +58,14 @@ function abrirFormPromotor(promotor, aoSalvar) {
         ? await api(`/api/promotores/${promotor.id}`, { method: 'PUT', json: dados })
         : await api('/api/promotores', { method: 'POST', json: dados });
       janela.close();
+      // Pendentes que eram a mesma pessoa foram ligados a este promotor: avisa na tela que abre em seguida.
+      if (resposta.ligados && resposta.ligados.length) {
+        const total = resposta.ligados.reduce((s, l) => s + l.atendimentos, 0);
+        const texto = `Ligado(s) automaticamente a este promotor: ${resposta.ligados.map((l) => `${l.nome} (${l.agencia || 'sem agência'})`).join('; ')}. `
+          + `${total} atendimento(s) passaram para ele e o(s) duplicado(s) foram apagados.`;
+        const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
+        guardar('aviso-ligacao', texto);
+      }
       aoSalvar(resposta.id);
     } catch (erro) {
       mostrarAviso(campo('aviso'), erro.message);

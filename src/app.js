@@ -192,8 +192,8 @@ function criarApp() {
     if (!detalhe) return res.status(404).json({ erro: 'Promotor não encontrado.' });
     res.json(detalhe);
   });
-  api.post('/promotores', async (req, res) => res.json({ id: await relatorios.salvarPromotor(null, req.body) }));
-  api.put('/promotores/:id', async (req, res) => res.json({ id: await relatorios.salvarPromotor(Number(req.params.id), req.body) }));
+  api.post('/promotores', async (req, res) => res.json(await relatorios.salvarPromotor(null, req.body)));
+  api.put('/promotores/:id', async (req, res) => res.json(await relatorios.salvarPromotor(Number(req.params.id), req.body)));
 
   api.post('/visitas', async (req, res) => {
     await relatorios.salvarVisita(req.body);
