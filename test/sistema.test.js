@@ -794,6 +794,33 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     }
   });
 
+  await t.test('código diferente é pessoa diferente: não junta pelo nome (cadastro, ligação automática e atendimentos)', async () => {
+    const vazio = { periculosidade: null, ajuda_celular: null, ajuda_custo: null, almoco: null, vale_transporte: null, gratificacao: null, outros_custos: null };
+    // Cadastro: "Homonimo Silva" cód. 5 no sistema; a planilha traz o mesmo nome com cód. 7 -> cria outro e avisa.
+    await regis('/api/promotores', { method: 'POST', json: { nome: 'Homonimo Silva', tipo: 'CLT', codigo: '5', empresa: '101 PR', salario: 1000 } });
+    const cad = { tipo: 'promotores', arquivo: 'homonimo.xlsx', itens: [{ nome: 'Homonimo Silva', codigo: '7', tipo: 'CLT', empresa: '101 PR', salario: 2000, ...vazio },
+      { nome: 'Homonimo Silva', codigo: '005', tipo: 'CLT', empresa: '101 PR', salario: 1100, ...vazio }] };
+    const previa = (await regis('/api/importar/previa', { method: 'POST', json: cad })).dados;
+    assert.deepEqual([previa.criar, previa.atualizar], [['Homonimo Silva'], ['Homonimo Silva']]); // o 7 é criado; o "005" = 5 atualiza
+    assert.match(previa.mensagem, /mesmo nome de alguém do sistema, mas com código diferente.*Homonimo Silva \(planilha: cód\. 7; sistema: cód\. 5\)/);
+    const r = (await regis('/api/importar/gravar', { method: 'POST', json: cad })).dados;
+    assert.deepEqual([r.promotoresNovos, r.promotoresAtualizados], [1, 1]);
+    assert.equal(r.avisos['Mesmo nome de um promotor do sistema, mas com código diferente (criado como outra pessoa)'], 1);
+    const homonimos = await consulta("SELECT codigo, salario::float FROM promotores WHERE nome = 'Homonimo Silva' ORDER BY codigo");
+    assert.deepEqual(homonimos.map((h) => [h.codigo, h.salario]), [['005', 1100], ['7', 2000]]);
+
+    // Ligação automática: pendente com o mesmo nome mas OUTRO código não é ligado; sem código no pendente, é.
+    const item = (codigo, loja) => ({ promotor: { nome: 'Pendente Homonimo', tipo: 'CLT', agencia: 'Ag Hom', codigo }, loja: { nome: loja, cnpj: '', cidade: 'H' }, mes: '2026-07', visitas: 1, custo: null });
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'hom.xlsx', itens: [item('99', 'Loja H1')] } });
+    const salvo = (await regis('/api/promotores', { method: 'POST', json: { nome: 'Pendente Homonimo', tipo: 'CLT', codigo: '11', agencia: 'Outra Ag' } })).dados;
+    assert.deepEqual(salvo.ligados, []);
+    assert.ok((await regis('/api/promotores/nao-identificados')).dados.pendentes.some((x) => x.nome === 'Pendente Homonimo' && x.codigo === '99'));
+    // Atendimentos: o CLT "Pendente Homonimo" cód. 11 agora é reconhecido pelo código; com cód. 12 (outro) não vira ele.
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'hom2.xlsx', itens: [item('12', 'Loja H2')] } });
+    const [{ n }] = await consulta("SELECT count(*)::int AS n FROM visitas v JOIN lojas l ON l.id = v.loja_id WHERE l.nome = 'Loja H2' AND v.promotor_id = $1", [salvo.id]);
+    assert.equal(n, 0);
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

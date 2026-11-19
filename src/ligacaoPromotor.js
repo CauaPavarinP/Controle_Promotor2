@@ -29,13 +29,15 @@ async function ligarDentro(rodar, pendente, destino) {
 // O pendente é a mesma pessoa que o promotor do cadastro?
 //  - mesmo código (sem zeros à esquerda: "06" = "6") E mesma agência (a agência do pendente igual à agência ou à
 //    empresa do cadastro, porque o cadastro de CLT costuma ter só a empresa); ou
-//  - mesmo nome normalizado (sem acento, minúsculo, sem espaços duplos).
+//  - mesmo nome normalizado (sem acento, minúsculo, sem espaços duplos), MENOS quando os dois têm código e os
+//    códigos são diferentes: código diferente é pessoa diferente.
 function mesmaPessoa(pendente, destino) {
   const codigo = codigoNormal(destino.codigo);
   const agencia = normalizar(pendente.agencia);
   const mesmaAgencia = agencia && [destino.agencia, destino.empresa].some((a) => normalizar(a) === agencia);
   if (codigo && codigoNormal(pendente.codigo) === codigo && mesmaAgencia) return true;
-  return nomeNormal(pendente.nome) !== '' && nomeNormal(pendente.nome) === nomeNormal(destino.nome);
+  const outroCodigo = codigo && codigoNormal(pendente.codigo) && codigoNormal(pendente.codigo) !== codigo;
+  return !outroCodigo && nomeNormal(pendente.nome) !== '' && nomeNormal(pendente.nome) === nomeNormal(destino.nome);
 }
 
 // Depois de salvar (tela) ou importar (cadastro) o promotor "destino", liga a ele os pendentes que são a mesma
