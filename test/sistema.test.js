@@ -963,6 +963,25 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.ok(lista.length >= 3 && lista.every((r) => /Auditado/.test(r.alvo)));
   });
 
+  await t.test('sessão: desativar o usuário invalida os cookies antigos, mesmo se ele for reativado depois', async () => {
+    await suporte('/api/usuarios', { method: 'POST', json: { login: 'reativado', nome: 'Teste Reativado', senha: 'senha-reativado', perfil: 'usuario' } });
+    const x = sessao();
+    assert.equal((await x('/api/login', { method: 'POST', json: { login: 'reativado', senha: 'senha-reativado' } })).status, 200);
+    const cookieAntigo = x.cookie();
+    const [u] = (await suporte('/api/usuarios')).dados.filter((v) => v.login === 'reativado');
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { ativo: false } });
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { ativo: true } });
+    // O cookie de ANTES da desativação não pode voltar a valer com a reativação.
+    assert.equal((await fetch(`${base}/api/eu`, { headers: { cookie: cookieAntigo } })).status, 401);
+    // Entrar de novo funciona normalmente.
+    assert.equal((await x('/api/login', { method: 'POST', json: { login: 'reativado', senha: 'senha-reativado' } })).status, 200);
+    assert.equal((await x('/api/eu')).status, 200);
+    // Editar só o nome (sem desativar) não derruba ninguém.
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { nome: 'Teste Reativado 2' } });
+    assert.equal((await x('/api/eu')).status, 200);
+    await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

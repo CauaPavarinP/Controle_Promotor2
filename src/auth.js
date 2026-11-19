@@ -164,7 +164,12 @@ async function atualizarUsuario(id, { nome, perfil, ativo, senha }, quemPediu) {
     if (id === quemPediu.id) throw new ErroDeValidacao('Você não pode tirar o seu próprio acesso de suporte.');
     await garantirOutroSuporte(id);
   }
-  await consulta('UPDATE usuarios SET nome = $1, perfil = $2, ativo = $3 WHERE id = $4', [novo.nome, novo.perfil, novo.ativo, id]);
+  // Desativar também aumenta a versão da sessão. Sem isso, "desativar" só barrava o acesso ENQUANTO o usuário
+  // estivesse inativo: se o suporte o reativasse em menos de 12 h, um cookie de antes da desativação (até um
+  // copiado ou roubado) voltava a valer. Com a versão nova, quem foi desativado precisa entrar de novo.
+  const desativou = atual.ativo && !novo.ativo;
+  await consulta(`UPDATE usuarios SET nome = $1, perfil = $2, ativo = $3, sessao_versao = sessao_versao + CASE WHEN $5 THEN 1 ELSE 0 END
+    WHERE id = $4`, [novo.nome, novo.perfil, novo.ativo, id, desativou]);
   if (trocaSenha) {
     // Senha nova definida pelo suporte: derruba as sessões abertas daquela pessoa.
     await consulta('UPDATE usuarios SET senha_hash = $1, sessao_versao = sessao_versao + 1 WHERE id = $2', [await bcrypt.hash(senha, 10), id]);
