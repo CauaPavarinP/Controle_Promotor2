@@ -1017,6 +1017,16 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
   });
 
+  await t.test('auditoria: registros com mais de 24 meses são apagados ao iniciar o sistema', async () => {
+    await consulta(`INSERT INTO auditoria (criado_em, usuario, acao, alvo) VALUES
+      (now() - interval '25 months', 'teste', 'teste.limpeza', 'antigo'),
+      (now() - interval '23 months', 'teste', 'teste.limpeza', 'recente')`);
+    await iniciarBanco(); // é o que acontece a cada vez que o servidor liga (deploy, ou o Render "acordando")
+    const alvos = (await consulta("SELECT alvo FROM auditoria WHERE acao = 'teste.limpeza' ORDER BY alvo")).map((r) => r.alvo);
+    assert.deepEqual(alvos, ['recente']);
+    await consulta("DELETE FROM auditoria WHERE acao = 'teste.limpeza'");
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

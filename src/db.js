@@ -237,6 +237,8 @@ CREATE TABLE IF NOT EXISTS auditoria (
   alvo        TEXT NOT NULL DEFAULT '',
   detalhes    JSONB NOT NULL DEFAULT '{}'
 );
+-- Índice pela data: a limpeza dos registros antigos (ver limparAuditoriaAntiga) acha as linhas sem ler a tabela toda.
+CREATE INDEX IF NOT EXISTS auditoria_criado_em ON auditoria (criado_em);
 
 ALTER TABLE supervisores ADD COLUMN IF NOT EXISTS usuario_id INTEGER UNIQUE REFERENCES usuarios(id) ON DELETE SET NULL;
 
@@ -355,6 +357,24 @@ function registrarMigracao(r) {
   if (r.porPrimeiroNome.length) linha(`Ligados pelo primeiro nome: ${r.porPrimeiroNome.join('; ')}`);
 }
 
+// Por quanto tempo o histórico de alterações (tabela auditoria) é guardado. O banco gratuito do Neon tem pouco
+// espaço, e um histórico sem fim cresceria para sempre. 24 meses cobrem com folga qualquer conferência
+// ("quem apagou isso no ano passado?"). Para guardar mais ou menos tempo, basta mudar este número.
+const MESES_GUARDANDO_AUDITORIA = 24;
+
+// Apaga os registros de auditoria mais velhos que o prazo. Roda a cada vez que o servidor liga; no Render
+// gratuito isso acontece várias vezes por semana (ele "dorme" quando ninguém usa), então não precisa de agendador.
+// Se falhar, só avisa no log: a limpeza não pode impedir o sistema de ligar.
+async function limparAuditoriaAntiga() {
+  try {
+    const apagados = await consulta(`DELETE FROM auditoria WHERE criado_em < now() - make_interval(months => $1) RETURNING id`,
+      [MESES_GUARDANDO_AUDITORIA]);
+    if (apagados.length) console.log(`[auditoria] ${apagados.length} registro(s) com mais de ${MESES_GUARDANDO_AUDITORIA} meses apagado(s).`);
+  } catch (erro) {
+    console.error('[auditoria] não foi possível apagar os registros antigos:', erro.message);
+  }
+}
+
 async function iniciarBanco() {
   await consulta(TABELAS);
   await consulta(ATUALIZACOES);
@@ -362,6 +382,7 @@ async function iniciarBanco() {
   await separarCargosDosNomes();
   const relatorio = await migrarSupervisores();
   registrarMigracao(relatorio);
+  await limparAuditoriaAntiga();
   return { supervisores: relatorio };
 }
 
