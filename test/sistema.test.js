@@ -743,6 +743,52 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal((await regis('/api/lojas-uf/exportar?de=2019-01&ate=2019-02')).status, 400); // exportações também
   });
 
+  await t.test('segurança: senha mínima no servidor, /api/usuarios só para o suporte (403), cookie e cabeçalhos', async () => {
+    // Senha mínima de 8 caracteres validada no SERVIDOR: criar usuário, editar usuário e trocar a própria senha.
+    const curta = await suporte('/api/usuarios', { method: 'POST', json: { login: 'curta', nome: 'Curta', senha: '1234567', perfil: 'usuario' } });
+    assert.deepEqual([curta.status, curta.dados.erro], [400, 'A senha precisa ter pelo menos 8 caracteres.']);
+    const reg = (await suporte('/api/usuarios')).dados.find((u) => u.login === 'regis');
+    const editar = await suporte(`/api/usuarios/${reg.id}`, { method: 'PUT', json: { nome: 'Nome Que Nao Pode Gravar', senha: 'curta' } });
+    assert.equal(editar.status, 400);
+    assert.equal((await suporte('/api/usuarios')).dados.find((u) => u.login === 'regis').nome, reg.nome); // nada foi gravado
+    assert.equal((await regis('/api/conta/senha', { method: 'POST', json: { senhaAtual: 'senha-regis', senhaNova: '1234567' } })).status, 400);
+
+    // Usuário comum recebe 403 em TODAS as rotas de usuários (a checagem é no servidor, não só na tela).
+    for (const [metodo, caminho, json] of [['GET', '/api/usuarios'], ['POST', '/api/usuarios', { login: 'x99', nome: 'X', senha: '12345678', perfil: 'suporte' }],
+      ['PUT', `/api/usuarios/${reg.id}`, { perfil: 'suporte' }], ['DELETE', `/api/usuarios/${reg.id}`]]) {
+      assert.equal((await regis(caminho, { method: metodo, ...(json ? { json } : {}) })).status, 403, `${metodo} ${caminho}`);
+    }
+    assert.equal((await suporte('/api/usuarios')).dados.find((u) => u.login === 'regis').perfil, 'usuario');
+
+    // Cabeçalhos: API sem cache e HSTS.
+    const r = await fetch(`${base}/api/eu`, { headers: { cookie: regis.cookie() } });
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(r.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+    assert.equal((await fetch(`${base}/api/resumo`)).headers.get('cache-control'), 'no-store'); // até o 401
+
+    // Cookie de sessão: HttpOnly e SameSite=Lax sempre; Secure em produção (atrás do HTTPS do Render).
+    const entrar = (url, extra) => fetch(`${url}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', ...extra },
+      body: JSON.stringify({ login: 'regis', senha: 'senha-regis' }) });
+    const cookieDev = (await entrar(base, { 'x-forwarded-for': '10.77.0.1' })).headers.getSetCookie().join('; ').toLowerCase();
+    assert.match(cookieDev, /httponly/);
+    assert.match(cookieDev, /samesite=lax/);
+    const config = require('../src/config');
+    const antes = config.producao;
+    config.producao = true;
+    const producao = criarApp().listen(0);
+    config.producao = antes;
+    try {
+      const resposta = await entrar(`http://localhost:${producao.address().port}`, { 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.77.0.2' });
+      const cookie = resposta.headers.getSetCookie().join('; ').toLowerCase();
+      assert.equal(resposta.status, 200);
+      assert.match(cookie, /httponly/);
+      assert.match(cookie, /samesite=lax/);
+      assert.match(cookie, /; secure/);
+    } finally {
+      producao.close();
+    }
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
