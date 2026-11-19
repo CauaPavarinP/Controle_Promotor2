@@ -266,7 +266,7 @@ Se preferir começar o banco novo vazio, pule os passos 1 e 3: ao iniciar, o sis
 
 ## Publicar no Render
 
-O arquivo `render.yaml` cria o serviço web e o banco PostgreSQL juntos (Render → New → Blueprint). No painel, preencha `ADMIN_LOGIN`, `ADMIN_NOME` e `ADMIN_SENHA`.
+O arquivo `render.yaml` descreve o serviço web (Render → New → Blueprint). **O banco não é criado por ele:** o banco é o PostgreSQL do Neon. No painel do Render, preencha `DATABASE_URL` (endereço do Neon), `ADMIN_LOGIN`, `ADMIN_NOME` e `ADMIN_SENHA`. O serviço que está no ar foi criado pelo painel; o Blueprint serve para recriá-lo do zero.
 
 Para migrar depois para outro banco PostgreSQL, basta trocar o `DATABASE_URL`. Os dados podem ser levados com `pg_dump` e `pg_restore`.
 

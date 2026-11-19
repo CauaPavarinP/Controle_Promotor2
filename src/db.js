@@ -221,8 +221,7 @@ CREATE TABLE IF NOT EXISTS visita_supervisor (
 );
 CREATE INDEX IF NOT EXISTS visita_supervisor_supervisor ON visita_supervisor (supervisor_id);
 
--- Preparado para o futuro perfil "Supervisor": o usuário que é este supervisor (ainda sem uso).
--- Versão da sessão: o cookie de login guarda este número. Sair ou trocar a senha aumenta o número, e todo cookie
+-- Versão da sessão: o cookie de login guarda este número. Sair, trocar a senha ou ser desativado aumenta o número, e todo cookie
 -- antigo daquele usuário (inclusive um copiado ou roubado) deixa de valer.
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sessao_versao INTEGER NOT NULL DEFAULT 0;
 
@@ -240,6 +239,7 @@ CREATE TABLE IF NOT EXISTS auditoria (
 -- Índice pela data: a limpeza dos registros antigos (ver limparAuditoriaAntiga) acha as linhas sem ler a tabela toda.
 CREATE INDEX IF NOT EXISTS auditoria_criado_em ON auditoria (criado_em);
 
+-- Preparado para o futuro perfil "Supervisor": o usuário que é este supervisor (ainda sem uso).
 ALTER TABLE supervisores ADD COLUMN IF NOT EXISTS usuario_id INTEGER UNIQUE REFERENCES usuarios(id) ON DELETE SET NULL;
 
 -- Cópia completa (inclusive salário) dos promotores que a migração moveu para supervisores.

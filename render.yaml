@@ -1,14 +1,16 @@
-# Blueprint do Render: cria o serviço web e o banco PostgreSQL juntos.
-# Os valores secretos (ADMIN_SENHA) são preenchidos no painel do Render.
-databases:
-  - name: controle-promotor-db
-    plan: free
-    databaseName: promotor
-    user: promotor
-
+# Blueprint do Render: descreve o serviço web (o servidor Node).
+#
+# O BANCO NÃO É CRIADO AQUI: o banco do sistema é o PostgreSQL do Neon (neon.tech), e não um banco do Render.
+# Por isso não há bloco "databases" e o DATABASE_URL não vem de "fromDatabase": ele é preenchido à mão no painel
+# do Render (serviço -> Environment), com o endereço de conexão copiado do painel do Neon.
+#
+# "sync: false" quer dizer: o Blueprint só declara que a variável existe; o VALOR fica no painel e nunca vai para
+# o GitHub. Vale para o DATABASE_URL (tem a senha do banco) e para os dados do primeiro usuário (ADMIN_*).
+# ATENÇÃO: o serviço que está no ar ("controle-promotor2") foi criado pelo painel, não por este arquivo. Este
+# Blueprint serve de documentação e para recriar o serviço do zero. Não aplique sem conferir antes.
 services:
   - type: web
-    name: controle-promotor
+    name: controle-promotor2
     runtime: node
     plan: free
     buildCommand: npm ci
@@ -18,9 +20,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: controle-promotor-db
-          property: connectionString
+        sync: false # endereço do banco no Neon, preenchido no painel do Render
       - key: SESSION_SECRET
         generateValue: true
       - key: META_PERCENTUAL
