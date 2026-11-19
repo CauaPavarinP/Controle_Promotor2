@@ -315,3 +315,7 @@ button.link:focus-visible { outline: 2px solid var(--principal); outline-offset:
 .escolha-modo legend { font-weight: 600; font-size: 14px; padding: 0 4px; }
 .escolha-modo label { display: block; padding: 4px 0; cursor: pointer; }
 .escolha-modo .ajuda { margin: 4px 0 0; }
+
+/* Histórico de alterações (tela Usuários): o texto dos detalhes quebra linha em vez de alargar a tabela. */
+.alvo-auditoria { min-width: 160px; }
+.detalhes-auditoria { white-space: normal; min-width: 260px; max-width: 520px; font-size: 13px; color: var(--texto-fraco); word-break: break-word; }

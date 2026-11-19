@@ -21,6 +21,56 @@ async function carregar() {
     </tr>`).join('');
 }
 
+// ---------- Histórico de alterações (auditoria) ----------
+const ACOES = {
+  'promotor.criar': 'Cadastrou promotor', 'promotor.editar': 'Editou promotor', 'promotor.excluir': 'Excluiu promotor',
+  'atendimento.lancar': 'Lançou atendimento', 'atendimento.excluir': 'Excluiu atendimento', 'atendimentos.excluir_da_loja': 'Excluiu atendimentos da loja',
+  'pendente.ligar': 'Ligou pendente', 'pendentes.excluir_sem_atendimento': 'Excluiu pendentes sem atendimento',
+  'supervisor.criar': 'Cadastrou supervisor', 'supervisor.editar': 'Editou supervisor', 'supervisor.excluir': 'Excluiu supervisor', 'supervisor.juntar': 'Juntou supervisores',
+  'importacao.gravar': 'Importou', 'importacao.desfazer': 'Desfez importação',
+  'usuario.criar': 'Criou usuário', 'usuario.editar': 'Editou usuário', 'usuario.excluir': 'Excluiu usuário', 'conta.trocar_senha': 'Trocou a própria senha',
+};
+const dataHora = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+const valorCurto = (v) => (v === null || v === undefined || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+
+// Detalhes em texto curto: "campo: antes → depois" quando é uma edição; senão "chave: valor".
+function textoDosDetalhes(d) {
+  if (!d || typeof d !== 'object') return '';
+  const partes = [];
+  if (d.mudou && typeof d.mudou === 'object') {
+    for (const [campo, m] of Object.entries(d.mudou)) partes.push(`${campo}: ${valorCurto(m.antes)} → ${valorCurto(m.depois)}`);
+    if (!Object.keys(d.mudou).length) partes.push('nenhum campo mudou');
+  }
+  for (const [chave, valor] of Object.entries(d)) {
+    const vazio = valor === null || valor === '' || valor === 0 || (typeof valor === 'object' && !Object.keys(valor).length);
+    if (chave === 'mudou' || vazio) continue; // zeros e listas vazias não dizem nada
+    partes.push(`${chave}: ${valorCurto(valor)}`);
+  }
+  return partes.join(' · ');
+}
+
+let buscaAtual = 0;
+async function carregarAuditoria() {
+  const minhaVez = ++buscaAtual;
+  const busca = el('busca-auditoria').value.trim();
+  try {
+    const registros = await api(`/api/auditoria?${parametros({ busca })}`);
+    if (minhaVez !== buscaAtual) return; // a pessoa já digitou outra coisa
+    mostrarAviso(el('aviso-auditoria'), '');
+    el('contagem-auditoria').textContent = `${registros.length} registro(s)`;
+    el('linhas-auditoria').innerHTML = registros.length ? registros.map((r) => `
+      <tr>
+        <td>${esc(dataHora.format(new Date(r.criado_em)))}</td>
+        <td>${esc(r.usuario || '—')}</td>
+        <td>${esc(ACOES[r.acao] || r.acao)}</td>
+        <td class="alvo-auditoria">${esc(r.alvo)}</td>
+        <td class="detalhes-auditoria">${esc(textoDosDetalhes(r.detalhes))}</td>
+      </tr>`).join('') : '<tr><td colspan="5">Nenhum registro.</td></tr>';
+  } catch (erro) {
+    mostrarAviso(el('aviso-auditoria'), erro.message);
+  }
+}
+
 function abrir(usuario) {
   editando = usuario;
   el('form').reset();
@@ -37,6 +87,9 @@ function abrir(usuario) {
   eu = await iniciarPagina();
   const aviso = el('aviso');
   try { await carregar(); } catch (erro) { mostrarAviso(aviso, erro.message); return; }
+  carregarAuditoria();
+  let espera;
+  el('busca-auditoria').addEventListener('input', () => { clearTimeout(espera); espera = setTimeout(carregarAuditoria, 300); });
 
   el('novo').addEventListener('click', () => abrir(null));
   el('cancelar').addEventListener('click', () => el('janela').close());
@@ -50,6 +103,7 @@ function abrir(usuario) {
       el('janela').close();
       mostrarAviso(aviso, 'Usuário salvo.', 'ok');
       await carregar();
+      carregarAuditoria();
     } catch (erro) {
       mostrarAviso(el('aviso-janela'), erro.message);
     }
@@ -69,6 +123,7 @@ function abrir(usuario) {
       }
       mostrarAviso(aviso, '');
       await carregar();
+      carregarAuditoria();
     } catch (erro) {
       mostrarAviso(aviso, erro.message);
     }

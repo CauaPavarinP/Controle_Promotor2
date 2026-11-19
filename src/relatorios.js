@@ -493,6 +493,55 @@ async function salvarVisita({ promotorId, lojaId, mes, visitas, custo }) {
   );
 }
 
+// Os campos do cadastro de um promotor (para a auditoria comparar o antes e o depois de uma edição).
+async function lerPromotor(id) {
+  const [p] = await consulta(`SELECT ${COLUNAS_PROMOTOR.join(', ')}, cadastrado FROM promotores WHERE id = $1`, [id]);
+  return p || null;
+}
+
+// ---------- Exclusões (cada uma numa transação só: ou apaga tudo, ou nada) ----------
+// Recebem "rodar" opcional, para a auditoria poder ser gravada na MESMA transação (ver app.js).
+
+// Exclui o promotor e todos os atendimentos dele. Devolve o que foi apagado (ou null se não existe).
+async function excluirPromotor(id, extra = async () => {}) {
+  return transacao(async (rodar) => {
+    const [p] = await rodar('SELECT id, nome, agencia, codigo, tipo FROM promotores WHERE id = $1 FOR UPDATE', [id]);
+    if (!p) return null;
+    const [{ n }] = await rodar('SELECT count(*)::int AS n FROM visitas WHERE promotor_id = $1', [id]);
+    await rodar('DELETE FROM promotores WHERE id = $1', [id]);
+    const resultado = { ...p, atendimentos: n };
+    await extra(rodar, resultado);
+    return resultado;
+  });
+}
+
+// Exclui UM atendimento (linha de visitas). Devolve o que foi apagado (ou null se o id não existe).
+async function excluirVisita(id, extra = async () => {}) {
+  return transacao(async (rodar) => {
+    const [v] = await rodar(`DELETE FROM visitas v USING promotores p, lojas l WHERE v.id = $1 AND p.id = v.promotor_id AND l.id = v.loja_id
+      RETURNING v.id, v.mes, v.qtd_visitas AS visitas, v.custo, p.nome AS promotor, l.nome AS loja`, [id]);
+    if (!v) return null;
+    await extra(rodar, v);
+    return v;
+  });
+}
+
+// Exclui TODOS os atendimentos de um promotor numa loja, no período (botão "Excluir" da ficha do promotor).
+// Antes a tela apagava um por um; se desse erro no meio, ficava metade apagada. Agora é um comando só.
+async function excluirVisitasDaLoja(promotorId, lojaId, query, extra = async () => {}) {
+  const { de, ate } = lerPeriodo(query);
+  return transacao(async (rodar) => {
+    const [nomes] = await rodar('SELECT p.nome AS promotor, l.nome AS loja FROM promotores p, lojas l WHERE p.id = $1 AND l.id = $2', [promotorId, lojaId]);
+    if (!nomes) return null;
+    const apagadas = await rodar(`DELETE FROM visitas WHERE promotor_id = $1 AND loja_id = $2 AND mes BETWEEN $3 AND $4
+      RETURNING mes, qtd_visitas AS visitas, custo`, [promotorId, lojaId, de, ate]);
+    if (!apagadas.length) return null;
+    const resultado = { ...nomes, de, ate, apagados: apagadas.length, meses: [...new Set(apagadas.map((a) => a.mes))].sort() };
+    await extra(rodar, resultado);
+    return resultado;
+  });
+}
+
 // Listas usadas nos filtros das telas. Fica guardada na memória da aba (ver comum.js), então pode ser maior.
 async function opcoes() {
   const [mesesFat, mesesVis, empresas, promotores, lojas, supervisores] = await Promise.all([
@@ -531,5 +580,5 @@ const nomesDosPromotores = async () => (await consulta('SELECT id, nome, tipo, a
 
 module.exports = {
   resumo, faturamentoPorLoja, listaDePromotores, detalheDoPromotor, detalheDaLoja, detalheDoCliente, lojasPorUf, agencias, supervisoresDoPeriodo,
-  salvarPromotor, salvarVisita, opcoes, listaDeLojas, nomesDosPromotores,
+  salvarPromotor, salvarVisita, lerPromotor, excluirPromotor, excluirVisita, excluirVisitasDaLoja, opcoes, listaDeLojas, nomesDosPromotores,
 };

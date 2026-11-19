@@ -13,7 +13,7 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
   const { criarApp } = require('../src/app');
   const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
 
-  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS visita_supervisor, backup_promotores_supervisores, visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup, supervisores, vinculos_promotor,
+  const apagarTudo = () => consulta(`DROP TABLE IF EXISTS auditoria, visita_supervisor, backup_promotores_supervisores, visitas, faturamento, faturamento_erp, clientes_erp, backup_faturamento_por_loja, importacoes_backup, supervisores, vinculos_promotor,
     importacoes, promotores, lojas, usuarios CASCADE`);
 
   // Migração: um banco no formato antigo (faturamento por loja, CNPJ único na loja) tem que virar o novo
@@ -875,6 +875,92 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     // Conexão que cai no meio da transação: devolve o erro original e a conexão morta não volta para o pool.
     await assert.rejects(transacao((rodar) => rodar('SELECT pg_terminate_backend(pg_backend_pid())')), /terminating connection/);
     for (let i = 0; i < 5; i++) assert.equal((await consulta('SELECT 1 AS ok'))[0].ok, 1);
+  });
+
+  await t.test('excluir visitas da loja: um pedido só, numa transação (tudo ou nada) e 404 quando não há o que apagar', async () => {
+    const item = (loja, mes) => ({ promotor: { nome: 'Excluir Lote', tipo: 'AGENCIA', agencia: 'Ag Lote', codigo: '' }, loja: { nome: loja, cnpj: '', cidade: 'L' }, mes, visitas: 2, custo: 10 });
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'lote.xlsx',
+      itens: [item('Loja Lote A', '2026-01'), item('Loja Lote A', '2026-02'), item('Loja Lote A', '2026-03'), item('Loja Lote B', '2026-01')] } });
+    const [{ pid }] = await consulta("SELECT id AS pid FROM promotores WHERE nome = 'Excluir Lote'");
+    const [{ lid }] = await consulta("SELECT id AS lid FROM lojas WHERE nome = 'Loja Lote A'");
+    const meses = async () => (await consulta('SELECT l.nome, v.mes FROM visitas v JOIN lojas l ON l.id = v.loja_id WHERE v.promotor_id = $1 ORDER BY 1, 2', [pid]))
+      .map((v) => `${v.nome} ${v.mes}`);
+    const excluir = (de, ate) => regis(`/api/promotores/${pid}/lojas/${lid}/visitas?de=${de}&ate=${ate}`, { method: 'DELETE' });
+
+    // Se o banco falhar no meio (aqui, forçado no mês 02), NADA é apagado: antes, o 01 já teria ido embora.
+    await consulta(`CREATE FUNCTION falha_no_meio() RETURNS trigger AS $$ BEGIN
+      IF OLD.mes = '2026-02' THEN RAISE EXCEPTION 'falha simulada'; END IF; RETURN OLD; END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER falha_no_meio BEFORE DELETE ON visitas FOR EACH ROW EXECUTE FUNCTION falha_no_meio();`);
+    try {
+      assert.equal((await excluir('2026-01', '2026-02')).status, 500);
+    } finally {
+      await consulta('DROP TRIGGER falha_no_meio ON visitas; DROP FUNCTION falha_no_meio();');
+    }
+    assert.deepEqual(await meses(), ['Loja Lote A 2026-01', 'Loja Lote A 2026-02', 'Loja Lote A 2026-03', 'Loja Lote B 2026-01']);
+
+    // Normal: apaga só a loja A no período (jan-fev); março e a loja B ficam.
+    const r = await excluir('2026-01', '2026-02');
+    assert.deepEqual([r.status, r.dados.apagados], [200, 2]);
+    assert.deepEqual(await meses(), ['Loja Lote A 2026-03', 'Loja Lote B 2026-01']);
+    // De novo: não há mais nada -> 404 (antes respondia "ok"). Período inválido -> 400.
+    assert.equal((await excluir('2026-01', '2026-02')).status, 404);
+    assert.equal((await excluir('2026-03', '2026-01')).status, 400);
+    assert.equal((await regis(`/api/promotores/${pid}/lojas/abc/visitas?de=2026-01&ate=2026-02`, { method: 'DELETE' })).status, 400);
+
+    // Excluir um atendimento só: 404 quando o id não existe (antes respondia "ok").
+    const [{ vid }] = await consulta('SELECT id AS vid FROM visitas WHERE promotor_id = $1 AND mes = $2', [pid, '2026-03']);
+    assert.equal((await regis(`/api/visitas/${vid}`, { method: 'DELETE' })).status, 200);
+    assert.equal((await regis(`/api/visitas/${vid}`, { method: 'DELETE' })).status, 404);
+  });
+
+  await t.test('auditoria: quem fez o quê (edições com antes/depois, exclusões na mesma transação, sem senha, só o suporte vê)', async () => {
+    const ultimo = async (acao) => (await consulta('SELECT * FROM auditoria WHERE acao = $1 ORDER BY id DESC LIMIT 1', [acao]))[0];
+    // Cadastrar e editar promotor: registra quem fez e só os campos que mudaram.
+    const { id } = (await regis('/api/promotores', { method: 'POST', json: { nome: 'Auditado Silva', tipo: 'CLT', codigo: '77', empresa: '101 PR', salario: 1500 } })).dados;
+    const criado = await ultimo('promotor.criar');
+    assert.match(criado.usuario, /\(regis\)$/);
+    assert.equal(criado.alvo, 'Auditado Silva');
+    assert.deepEqual(criado.detalhes.mudou.salario, { antes: null, depois: 1500 });
+    await regis(`/api/promotores/${id}`, { method: 'PUT', json: { nome: 'Auditado Silva', tipo: 'CLT', codigo: '77', empresa: '101 PR', salario: 1800 } });
+    const editado = await ultimo('promotor.editar');
+    assert.deepEqual(Object.keys(editado.detalhes.mudou), ['salario']);
+    assert.deepEqual(editado.detalhes.mudou.salario, { antes: 1500, depois: 1800 });
+
+    // Exclusão: o registro é gravado NA MESMA transação. Se a auditoria falhar, o promotor NÃO é apagado.
+    await consulta(`CREATE FUNCTION auditoria_quebrada() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'auditoria fora do ar'; END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER auditoria_quebrada BEFORE INSERT ON auditoria FOR EACH ROW EXECUTE FUNCTION auditoria_quebrada();`);
+    try {
+      assert.equal((await regis(`/api/promotores/${id}`, { method: 'DELETE' })).status, 500);
+      assert.equal((await consulta('SELECT count(*)::int AS n FROM promotores WHERE id = $1', [id]))[0].n, 1);
+      // Já uma edição continua salva mesmo sem conseguir registrar (o erro vai para o log do servidor).
+      assert.equal((await regis(`/api/promotores/${id}`, { method: 'PUT', json: { nome: 'Auditado Silva', tipo: 'CLT', codigo: '77', empresa: '101 PR', salario: 1900 } })).status, 200);
+    } finally {
+      await consulta('DROP TRIGGER auditoria_quebrada ON auditoria; DROP FUNCTION auditoria_quebrada();');
+    }
+    assert.equal((await regis(`/api/promotores/${id}`, { method: 'DELETE' })).status, 200);
+    const excluido = await ultimo('promotor.excluir');
+    assert.deepEqual([excluido.alvo, excluido.detalhes.codigo, excluido.detalhes.atendimentos], ['Auditado Silva', '77', 0]);
+
+    // Importar e desfazer ficam registrados com o arquivo.
+    const item = { promotor: { nome: 'Auditado Visita', tipo: 'AGENCIA', agencia: 'Ag Aud', codigo: '' }, loja: { nome: 'Loja Aud', cnpj: '', cidade: 'A' }, mes: '2026-04', visitas: 1, custo: 5 };
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'auditoria.xlsx', itens: [item] } });
+    assert.equal((await ultimo('importacao.gravar')).alvo, 'visitas: auditoria.xlsx');
+    const [{ imp }] = await consulta("SELECT id AS imp FROM importacoes WHERE arquivo = 'auditoria.xlsx'");
+    assert.equal((await regis(`/api/importacoes/${imp}`, { method: 'DELETE' })).status, 200);
+    assert.match((await ultimo('importacao.desfazer')).alvo, /auditoria\.xlsx$/);
+
+    // Senha: registra que foi redefinida, mas a senha em si nunca aparece.
+    const [reg] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'regis');
+    await suporte(`/api/usuarios/${reg.id}`, { method: 'PUT', json: { nome: reg.nome, senha: 'senha-regis' } });
+    await regis('/api/login', { method: 'POST', json: { login: 'regis', senha: 'senha-regis' } }); // a senha redefinida derruba a sessão
+    const senha = await ultimo('usuario.editar');
+    assert.equal(senha.detalhes.senhaRedefinida, true);
+    assert.doesNotMatch(JSON.stringify(await consulta('SELECT * FROM auditoria')), /senha-regis/);
+
+    // Só o suporte lê o histórico; a busca filtra.
+    assert.equal((await regis('/api/auditoria')).status, 403);
+    const lista = (await suporte('/api/auditoria?busca=Auditado')).dados;
+    assert.ok(lista.length >= 3 && lista.every((r) => /Auditado/.test(r.alvo)));
   });
 
   await t.test('o sistema não fica sem suporte', async () => {

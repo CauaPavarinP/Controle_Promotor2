@@ -92,12 +92,17 @@ async function carregar(manterPagina = false) {
     if (!botao) return;
     const loja = detalhe.lojas[Number(botao.dataset.excluir)];
     if (!confirm(`Excluir as visitas de "${loja.loja.nome}" neste período? O custo delas sai da conta.`)) return;
+    // Um pedido só: o servidor apaga todos os atendimentos desta loja no período, numa transação (tudo ou nada).
+    let mensagem; let tipo = 'ok';
     try {
-      for (const atendimento of loja.atendimentos) await api(`/api/visitas/${atendimento.id}`, { method: 'DELETE' });
+      const r = await api(`/api/promotores/${idPromotor}/lojas/${loja.loja.id}/visitas?${parametros(periodoAtual())}`, { method: 'DELETE' });
+      mensagem = `${r.apagados} atendimento(s) de "${loja.loja.nome}" excluído(s).`;
+      const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
     } catch (erro) {
-      mostrarAviso(document.getElementById('aviso'), erro.message);
+      mensagem = erro.message; tipo = 'erro';
     }
-    carregar(true);
+    await carregar(true);
+    mostrarAviso(document.getElementById('aviso'), mensagem, tipo);
   });
 
   // Lançar visita manualmente.

@@ -116,6 +116,11 @@ function exigirSuporte(req, res, next) {
 
 // ----- Usuários -----
 
+async function lerUsuario(id) {
+  const [u] = await consulta('SELECT id, login, nome, perfil, ativo FROM usuarios WHERE id = $1', [id]);
+  return u || null;
+}
+
 async function listarUsuarios() {
   return consulta('SELECT id, login, nome, perfil, ativo, criado_em FROM usuarios ORDER BY nome');
 }
@@ -201,6 +206,6 @@ async function criarPrimeiroUsuario() {
 }
 
 module.exports = {
-  entrar, usuarioDaSessao, encerrarSessoes, exigirLogin, exigirSuporte, listarUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
+  entrar, usuarioDaSessao, encerrarSessoes, lerUsuario, exigirLogin, exigirSuporte, listarUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
   trocarPropriaSenha, criarPrimeiroUsuario, ErroDeValidacao,
 };
