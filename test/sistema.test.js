@@ -996,6 +996,27 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     await consulta("DELETE FROM visitas WHERE mes = '2020-01' AND promotor_id = $1 AND loja_id = $2", [pid, lid]);
   });
 
+  await t.test('senha com mais de 72 bytes é recusada (o bcrypt ignoraria o resto) ao criar, editar e trocar', async () => {
+    const longa = 'a'.repeat(72) + 'X'; // 73 bytes
+    const acentuada = 'é'.repeat(37); // 37 caracteres, mas 74 bytes (cada "é" ocupa 2 bytes em UTF-8)
+    const msg = /no máximo 72 bytes/;
+    for (const senha of [longa, acentuada]) {
+      const r = await suporte('/api/usuarios', { method: 'POST', json: { login: 'senhalonga', nome: 'Senha Longa', senha, perfil: 'usuario' } });
+      assert.deepEqual([r.status, msg.test(r.dados.erro)], [400, true]);
+    }
+    // 72 bytes exatos: aceita, e a pessoa entra.
+    const limite = 'b'.repeat(72);
+    assert.equal((await suporte('/api/usuarios', { method: 'POST', json: { login: 'senhalonga', nome: 'Senha Longa', senha: limite, perfil: 'usuario' } })).status, 200);
+    const x = sessao();
+    assert.equal((await x('/api/login', { method: 'POST', json: { login: 'senhalonga', senha: limite } })).status, 200);
+    // Editar (suporte) e trocar a própria senha também recusam.
+    const [u] = (await suporte('/api/usuarios')).dados.filter((v) => v.login === 'senhalonga');
+    assert.equal((await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { senha: longa } })).status, 400);
+    assert.equal((await x('/api/conta/senha', { method: 'POST', json: { senhaAtual: limite, senhaNova: acentuada } })).status, 400);
+    assert.equal((await x('/api/eu')).status, 200); // nada mudou: continua logado com a senha antiga
+    await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);
