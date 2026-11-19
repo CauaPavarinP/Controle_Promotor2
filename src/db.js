@@ -222,6 +222,10 @@ CREATE TABLE IF NOT EXISTS visita_supervisor (
 CREATE INDEX IF NOT EXISTS visita_supervisor_supervisor ON visita_supervisor (supervisor_id);
 
 -- Preparado para o futuro perfil "Supervisor": o usuário que é este supervisor (ainda sem uso).
+-- Versão da sessão: o cookie de login guarda este número. Sair ou trocar a senha aumenta o número, e todo cookie
+-- antigo daquele usuário (inclusive um copiado ou roubado) deixa de valer.
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sessao_versao INTEGER NOT NULL DEFAULT 0;
+
 ALTER TABLE supervisores ADD COLUMN IF NOT EXISTS usuario_id INTEGER UNIQUE REFERENCES usuarios(id) ON DELETE SET NULL;
 
 -- Cópia completa (inclusive salário) dos promotores que a migração moveu para supervisores.

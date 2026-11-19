@@ -821,6 +821,49 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal(n, 0);
   });
 
+  await t.test('sessão: sair e trocar a senha invalidam no servidor os cookies antigos (inclusive uma cópia)', async () => {
+    await suporte('/api/usuarios', { method: 'POST', json: { login: 'sessoes', nome: 'Teste Sessoes', senha: 'senha-sessoes', perfil: 'suporte' } });
+    const entrar = async (senha = 'senha-sessoes') => {
+      const s = sessao();
+      assert.equal((await s('/api/login', { method: 'POST', json: { login: 'sessoes', senha } })).status, 200);
+      return s;
+    };
+    // Usa um cookie "copiado" (o texto exato), sem atualizar: é o que um invasor teria.
+    const comCookie = (cookie) => fetch(`${base}/api/eu`, { headers: { cookie } }).then((r) => r.status);
+
+    // 1) Sair: o cookie copiado antes do "Sair" para de funcionar, e o outro computador também cai.
+    const pc1 = await entrar();
+    const pc2 = await entrar();
+    const copia = pc1.cookie();
+    assert.equal(await comCookie(copia), 200);
+    await pc1('/api/logout', { method: 'POST' });
+    assert.equal(await comCookie(copia), 401);
+    assert.equal((await pc2('/api/eu')).status, 401);
+
+    // 2) Um cookie velho chamando "Sair" não derruba quem entrou depois.
+    const pc3 = await entrar();
+    await fetch(`${base}/api/logout`, { method: 'POST', headers: { cookie: copia } });
+    assert.equal((await pc3('/api/eu')).status, 200);
+
+    // 3) Trocar a própria senha: quem trocou continua logado; as outras sessões e as cópias caem.
+    const pc4 = await entrar();
+    const copia3 = pc3.cookie();
+    assert.equal((await pc3('/api/conta/senha', { method: 'POST', json: { senhaAtual: 'senha-sessoes', senhaNova: 'senha-nova-1' } })).status, 200);
+    assert.equal((await pc3('/api/eu')).status, 200);
+    assert.equal(await comCookie(copia3), 401); // o cookie de antes da troca
+    assert.equal((await pc4('/api/eu')).status, 401);
+
+    // 4) O suporte define uma senha nova para a pessoa: as sessões dela caem.
+    const [u] = (await suporte('/api/usuarios')).dados.filter((x) => x.login === 'sessoes');
+    assert.equal((await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { senha: 'senha-nova-2' } })).status, 200);
+    assert.equal((await pc3('/api/eu')).status, 401);
+    // Mudar só o nome não derruba ninguém.
+    const pc5 = await entrar('senha-nova-2');
+    await suporte(`/api/usuarios/${u.id}`, { method: 'PUT', json: { nome: 'Teste Sessoes 2' } });
+    assert.equal((await pc5('/api/eu')).status, 200);
+    await suporte(`/api/usuarios/${u.id}`, { method: 'DELETE' });
+  });
+
   await t.test('banco: conexão que cai (parada ou no meio da transação) não derruba o servidor', async () => {
     // Deixa algumas conexões paradas no pool e manda o banco encerrá-las, como o Neon faz quando "dorme".
     await Promise.all([1, 2, 3].map(() => consulta('SELECT pg_sleep(0.05)')));
