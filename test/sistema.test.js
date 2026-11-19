@@ -704,6 +704,25 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     assert.equal((await consulta('SELECT count(*)::int AS n FROM promotores'))[0].n, antes);
   });
 
+  await t.test('desfazer apaga os promotores que a importação criou e ficaram sem atendimento; limpar pendentes órfãos', async () => {
+    const item = (nome, loja) => ({ promotor: { nome, tipo: 'CLT', agencia: 'Ag Orfa', codigo: '' }, loja: { nome: loja, cnpj: '', cidade: 'O' }, mes: '2026-09', visitas: 1, custo: 5 });
+    await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'orfa.xlsx', itens: [item('Orfa Um', 'Loja O1'), item('Orfa Dois', 'Loja O2')] } });
+    const [criados] = await consulta("SELECT count(*)::int AS n, min(importacao_id) AS imp FROM promotores WHERE nome LIKE 'Orfa %'");
+    assert.equal(criados.n, 2);
+    // "Orfa Dois" foi cadastrado pela tela depois: não pode ser apagado pelo Desfazer.
+    const [dois] = await consulta("SELECT id FROM promotores WHERE nome = 'Orfa Dois'");
+    await regis(`/api/promotores/${dois.id}`, { method: 'PUT', json: { nome: 'Orfa Dois', tipo: 'CLT', agencia: 'Ag Orfa' } });
+    const d = (await regis(`/api/importacoes/${criados.imp}`, { method: 'DELETE' })).dados;
+    assert.deepEqual([d.registros, d.promotoresApagados], [2, 1]);
+    assert.deepEqual((await consulta("SELECT nome FROM promotores WHERE nome LIKE 'Orfa %'")).map((x) => x.nome), ['Orfa Dois']);
+    // Pendente órfão antigo (sem importação de origem e sem atendimento): a tela consegue limpar.
+    await consulta("INSERT INTO promotores (nome, tipo, agencia, pendente) VALUES ('Orfa Antigo', 'CLT', 'Ag Orfa', 'nao_encontrado')");
+    const limpo = (await regis('/api/promotores/nao-identificados/limpar', { method: 'POST' })).dados;
+    assert.ok(limpo.apagados >= 1);
+    assert.equal((await consulta("SELECT count(*)::int AS n FROM promotores WHERE nome = 'Orfa Antigo'"))[0].n, 0);
+    assert.ok((await regis('/api/promotores/nao-identificados')).dados.pendentes.every((x) => x.lojas > 0)); // só ficam os com atendimento
+  });
+
   await t.test('o sistema não fica sem suporte', async () => {
     const [eu] = (await suporte('/api/usuarios')).dados.filter((u) => u.login === 'suporte');
     assert.equal((await suporte(`/api/usuarios/${eu.id}`, { method: 'PUT', json: { perfil: 'usuario' } })).status, 400);

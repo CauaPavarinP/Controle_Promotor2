@@ -176,6 +176,10 @@ ALTER TABLE promotores ADD COLUMN IF NOT EXISTS pendente TEXT NOT NULL DEFAULT '
 -- Antes, salvar pela tela marcava "cadastrado" mas deixava "pendente", e ele ficava preso na lista de pendências.
 UPDATE promotores SET pendente = '' WHERE cadastrado AND pendente <> '';
 
+-- Importação que criou o promotor (vazio = criado pela tela ou antes desta coluna existir). O "Desfazer" usa isso
+-- para apagar os promotores que a importação criou e que ficaram sem nenhum atendimento.
+ALTER TABLE promotores ADD COLUMN IF NOT EXISTS importacao_id INTEGER REFERENCES importacoes(id) ON DELETE SET NULL;
+
 -- Ligação feita à mão na tela: o nome do promotor como vem na planilha (+ agência) é este promotor do cadastro.
 -- Vale para as próximas importações. "nome" e "agencia" ficam sem acento e minúsculos.
 CREATE TABLE IF NOT EXISTS vinculos_promotor (

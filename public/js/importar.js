@@ -327,7 +327,8 @@ async function desfazer(evento) {
   try {
     const r = await api(`/api/importacoes/${botao.dataset.desfazer}?${parametros({ confirmacao })}`, { method: 'DELETE' });
     const eu = guardado('eu'); esquecerTudo(); if (eu) guardar('eu', eu); // as listas lembradas ficaram velhas
-    mostrarAviso(el('aviso'), `Importação desfeita: ${r.registros} registro(s) apagado(s) e ${r.restaurados} restaurado(s).`, 'ok');
+    mostrarAviso(el('aviso'), `Importação desfeita: ${r.registros} registro(s) apagado(s) e ${r.restaurados} restaurado(s)`
+      + `${r.promotoresApagados ? `; ${r.promotoresApagados} promotor(es) que ela tinha criado e ficaram sem atendimento foram apagados` : ''}.`, 'ok');
     await carregarListas();
   } catch (erro) {
     mostrarAviso(el('aviso'), erro.message);

@@ -99,6 +99,15 @@ async function ligarPromotor(pendenteId, destinoId) {
   });
 }
 
+// Apaga os promotores pendentes que não têm nenhum atendimento e não foram cadastrados (ex.: sobraram de uma
+// importação desfeita antes de o sistema guardar a importação de origem). Não toca em quem tem atendimento.
+async function apagarPendentesSemAtendimento() {
+  const apagados = await consulta(`DELETE FROM promotores p WHERE p.pendente <> '' AND NOT p.cadastrado
+    AND NOT EXISTS (SELECT 1 FROM visitas v WHERE v.promotor_id = p.id) RETURNING nome`);
+  return { apagados: apagados.length };
+}
+
 module.exports = {
+  apagarPendentesSemAtendimento,
   listarCadastro, criarSupervisor, editarSupervisor, excluirSupervisor, juntarSupervisores, naoIdentificados, ligarPromotor,
 };

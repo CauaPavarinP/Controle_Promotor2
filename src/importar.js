@@ -397,8 +397,9 @@ async function gravarPromotores(dados, usuario) {
         const valores = [...COLUNAS, 'telefone', 'observacao'].map((coluna) => (CAMPOS_DINHEIRO.includes(coluna) ? p[coluna] || 0 : p[coluna]));
         const marcadores = valores.map((_, i) => `$${i + 1}`).join(', ');
         const [criado] = await rodar(
-          `INSERT INTO promotores (${COLUNAS.join(', ')}, telefone, observacao, cadastrado, pendente) VALUES (${marcadores}, TRUE, '') RETURNING *`,
-          valores,
+          `INSERT INTO promotores (${COLUNAS.join(', ')}, telefone, observacao, cadastrado, pendente, importacao_id)
+           VALUES (${marcadores}, TRUE, '', $${valores.length + 1}) RETURNING *`,
+          [...valores, importacaoId],
         );
         cadastro.incluir(criado);
         id = criado.id;
@@ -570,8 +571,8 @@ async function gravarVisitas(dados, usuario) {
           //  - é CLT e não está no cadastro (CLT deveria estar; sem cadastro não há salário).
           // Promotor de agência, MEI ou freelancer que não existe ainda é só um promotor novo.
           const pendente = motivo === 'ambiguo' || p.tipo === 'CLT' ? motivo : '';
-          const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia, codigo, pendente) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-            [p.nome, p.tipo, p.agencia, p.codigo, pendente]);
+          const [criado] = await rodar('INSERT INTO promotores (nome, tipo, agencia, codigo, pendente, importacao_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [p.nome, p.tipo, p.agencia, p.codigo, pendente, importacaoId]);
           cadastro.incluir(criado);
           id = criado.id;
           if (pendente) naoIdentificados.add(id);
@@ -821,8 +822,12 @@ async function desfazerImportacao(id, confirmacao = '') {
       // Os vínculos com os supervisores voltam a partir do texto original guardado em visitas.supervisor.
       if (imp.tipo === 'visitas') await ligarAtendimentos(rodar, restaurados.map((v) => ({ visitaId: v.id, texto: v.supervisor })));
     }
+    // Promotores que esta importação criou e que ficaram sem nenhum atendimento: saem também.
+    // Não apaga quem foi cadastrado depois (pela tela ou pela planilha de cadastro).
+    const promotoresApagados = await rodar(`DELETE FROM promotores p WHERE p.importacao_id = $1 AND NOT p.cadastrado
+      AND NOT EXISTS (SELECT 1 FROM visitas v WHERE v.promotor_id = p.id) RETURNING 1`, [id]);
     await rodar('DELETE FROM importacoes WHERE id = $1', [id]); // a cópia vai junto (ON DELETE CASCADE)
-    return { registros: apagados.length, restaurados: restaurados.length, semCopia: !imp.restauravel };
+    return { registros: apagados.length, restaurados: restaurados.length, promotoresApagados: promotoresApagados.length, semCopia: !imp.restauravel };
   });
 }
 

@@ -39,7 +39,9 @@
       <div id="aviso" class="aviso" hidden></div>
       <div class="painel" id="nao-identificados" hidden>
         <h2>Promotores não identificados</h2>
-        <p class="ajuda">A importação não conseguiu saber com certeza quem é cada um destes (mais de um parecido no cadastro, ou CLT que não está no cadastro). Escolha o promotor certo e clique em Ligar: os atendimentos passam para ele e a ligação fica guardada para as próximas importações.</p>
+        <p class="ajuda">A importação não conseguiu saber com certeza quem é cada um destes (mais de um parecido no cadastro, ou CLT que não está no cadastro). Escolha o promotor certo e clique em Ligar: os atendimentos passam para ele e a ligação fica guardada para as próximas importações. Também resolve: cadastrar ou editar o promotor (ou importar o cadastro) com o mesmo código e agência, ou o mesmo nome.</p>
+        <p class="ajuda" id="sem-atendimento-linha" hidden><span id="sem-atendimento-texto"></span>
+          <button type="button" class="perigo pequeno" id="limpar-pendentes">Excluir os pendentes sem atendimento</button></p>
         <div class="rolagem"><table>
           <thead><tr><th>Nome na planilha</th><th>Motivo</th><th class="num">Lojas</th><th>Ligar a</th><th></th></tr></thead>
           <tbody id="pendentes"></tbody>

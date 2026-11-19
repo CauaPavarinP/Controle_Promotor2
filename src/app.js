@@ -164,6 +164,8 @@ function criarApp() {
 
   // Promotores que a importação não identificou com certeza, e a ligação feita à mão (fica guardada).
   api.get('/promotores/nao-identificados', async (req, res) => res.json(await supervisores.naoIdentificados()));
+  // Apaga os pendentes sem nenhum atendimento (a tela pede confirmação antes).
+  api.post('/promotores/nao-identificados/limpar', async (req, res) => res.json(await supervisores.apagarPendentesSemAtendimento()));
   api.post('/promotores/:id/ligar', async (req, res) => {
     res.json({ ok: true, ...(await supervisores.ligarPromotor(Number(req.params.id), Number(req.body.destinoId))) });
   });
