@@ -8,7 +8,7 @@ const urlTeste = process.env.DATABASE_URL_TESTE;
 
 test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE para rodar' }, async (t) => {
   process.env.DATABASE_URL = urlTeste;
-  const { consulta, iniciarBanco, fecharBanco, migrarSupervisores } = require('../src/db');
+  const { consulta, transacao, iniciarBanco, fecharBanco, migrarSupervisores } = require('../src/db');
   const auth = require('../src/auth');
   const { criarApp } = require('../src/app');
   const { montarPlanilha, analisar, criarAgrupador } = require('../src/planilha');
@@ -819,6 +819,19 @@ test('sistema completo', { skip: urlTeste ? false : 'defina DATABASE_URL_TESTE p
     await regis('/api/importar/gravar', { method: 'POST', json: { tipo: 'visitas', arquivo: 'hom2.xlsx', itens: [item('12', 'Loja H2')] } });
     const [{ n }] = await consulta("SELECT count(*)::int AS n FROM visitas v JOIN lojas l ON l.id = v.loja_id WHERE l.nome = 'Loja H2' AND v.promotor_id = $1", [salvo.id]);
     assert.equal(n, 0);
+  });
+
+  await t.test('banco: conexão que cai (parada ou no meio da transação) não derruba o servidor', async () => {
+    // Deixa algumas conexões paradas no pool e manda o banco encerrá-las, como o Neon faz quando "dorme".
+    await Promise.all([1, 2, 3].map(() => consulta('SELECT pg_sleep(0.05)')));
+    const [{ n }] = await consulta(`SELECT count(pg_terminate_backend(pid))::int AS n FROM pg_stat_activity
+      WHERE datname = current_database() AND usename = current_user AND pid <> pg_backend_pid()`);
+    assert.ok(n >= 1);
+    await new Promise((ok) => setTimeout(ok, 200));
+    assert.equal((await regis('/api/eu')).status, 200); // o servidor continua de pé e abre conexões novas
+    // Conexão que cai no meio da transação: devolve o erro original e a conexão morta não volta para o pool.
+    await assert.rejects(transacao((rodar) => rodar('SELECT pg_terminate_backend(pg_backend_pid())')), /terminating connection/);
+    for (let i = 0; i < 5; i++) assert.equal((await consulta('SELECT 1 AS ok'))[0].ok, 1);
   });
 
   await t.test('o sistema não fica sem suporte', async () => {

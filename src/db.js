@@ -9,7 +9,13 @@ types.setTypeParser(1700, (valor) => parseFloat(valor));
 
 let pool;
 function obterPool() {
-  if (!pool) pool = new Pool({ connectionString: config.databaseUrl });
+  if (!pool) {
+    pool = new Pool({ connectionString: config.databaseUrl });
+    // Uma conexão PARADA no pool pode ser fechada pelo banco (o Neon e o Render fecham as ociosas, e um reinício do
+    // banco também). Sem este "ouvinte", o Node trata o aviso como erro fatal e o servidor inteiro cai. Com ele,
+    // só registramos no log: o pool joga fora a conexão morta e abre outra na próxima consulta.
+    pool.on('error', (erro) => console.error('[banco] uma conexão parada caiu e foi descartada:', erro.message));
+  }
   return pool;
 }
 
@@ -23,16 +29,32 @@ async function consulta(sql, parametros = []) {
 async function transacao(funcao) {
   const cliente = await obterPool().connect();
   const rodar = async (sql, parametros = []) => (await cliente.query(sql, parametros)).rows;
+  let conexaoQuebrada = null;
+  // Enquanto a conexão está emprestada para esta transação, o aviso de "caiu" vem nela (e não no pool).
+  // Sem este ouvinte o servidor cairia; com ele, a consulta em andamento falha normalmente e a conexão é descartada.
+  const aoCair = (erro) => {
+    conexaoQuebrada = erro;
+    console.error('[banco] a conexão caiu durante uma transação:', erro.message);
+  };
+  cliente.on('error', aoCair);
   try {
     await cliente.query('BEGIN');
     const retorno = await funcao(rodar);
     await cliente.query('COMMIT');
     return retorno;
   } catch (erro) {
-    await cliente.query('ROLLBACK');
+    // Se a conexão caiu no meio, o próprio ROLLBACK também falha. Nesse caso guardamos a falha (para a conexão
+    // ser descartada lá embaixo) e devolvemos o erro ORIGINAL, que é o que explica o problema.
+    try {
+      await cliente.query('ROLLBACK');
+    } catch (erroNoRollback) {
+      conexaoQuebrada = erroNoRollback;
+    }
     throw erro;
   } finally {
-    cliente.release();
+    // release(erro) descarta a conexão em vez de devolvê-la ao pool: a próxima consulta não pega uma conexão morta.
+    cliente.off('error', aoCair);
+    cliente.release(conexaoQuebrada || undefined);
   }
 }
 
